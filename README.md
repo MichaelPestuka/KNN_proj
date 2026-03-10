@@ -16,5 +16,10 @@ This is a copy of the custom assignement from StudIS
 > - https://arxiv.org/pdf/2408.14837
 > - https://labs.google/projectgenie
 
+The email also mentions:
+
+- https://github.com/Farama-Foundation/Gymnasium
+- https://github.com/Farama-Foundation/stable-retro
+
 ## LaTeX docs
 I personally use [this](https://marketplace.cursorapi.com/items/?itemName=James-Yu.latex-workshop) extension.
