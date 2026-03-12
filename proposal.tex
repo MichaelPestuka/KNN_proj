@@ -19,6 +19,8 @@
 \section{Problem}
 The goal of our project is to create a playable simulation of a computer game by using a diffusion model. For such a model, the input is the previous frame (or a sequence of frames) and the user action. The output is the next frame. Various computer games have already been simulated using this approach. We plan on simulating a retro platformer, e.g. Super Mario Brothers (1985).
 
+Success on this type of task can be measured by the PSNR metric, for example.
+
 \section{Data}
 It is our intention to generate our own trainig data using pre-existing games. This data will be formatted as a sequence of frames and actions performed during those frames. To capture this data we can use a reinforcement learning platform such as Gymnasium \footnote{\url{https://openreview.net/pdf?id=qPMLvJxtPK}}, which will allow us to automatically generate a large amount of data.
 
