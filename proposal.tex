@@ -30,7 +30,7 @@ It is our intention to generate our own trainig data using pre-existing games. T
 
 We have drawn inspiration from \textit{GameNGen}\footnote{\url{https://arxiv.org/pdf/2408.14837}} and \textit{Oasis}\footnote{\url{https://oasis-model.github.io/}}, simulating Minecraft and Doom respectively. Both comprise of an auto-encoder and a diffusion model. The former is based on pre-trained \textit{Stable Diffusion 1.4} models while the latter uses a transformer-based architecture with \textit{ViT}\footnote{\url{https://arxiv.org/pdf/2010.11929}} and \textit{DiT}\footnote{\url{https://arxiv.org/pdf/2212.09748}}.
 
-In Appendix A of \textit{GameNGen}, section 10, the authors describe their inital experiment on the dinosaur game present in Google Chrome web browser, noting that their approach worked well with only 2000 episodes of training data and 3000 training epochs. This shows us the feasibility of scaling down their approach. The fact that pre-trained models are used and only fine tuned is also beneficial.
+In Appendix A of \textit{GameNGen}, the authors describe their inital experiment on the dinosaur game present in Google Chrome, noting that their approach worked well with limited training data and time. This shows us the feasibility of scaling down their approach based on pre-trained models.
 
 \subsection{Experiments}
 
