@@ -40,3 +40,12 @@ Outputs one folder per run under `collected_data/` (see `run.json` + JPEG frames
 `run.json` always includes `seed`, `seed_source` (`cli_replay` or `generated_at_run_start`), and `seed_note`.
 
 Run `pipenv run python collect_data.py --help` for the full argparse text.
+
+## Replay a run (GUI)
+
+The replay viewer lives in a **separate** folder so it does not share the gym/collection stack and can use a Python build with Tk (see [`super-mario-bros-viewer/README.md`](../super-mario-bros-viewer/README.md)).
+
+```bash
+cd ../super-mario-bros-viewer
+pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_001
+```
