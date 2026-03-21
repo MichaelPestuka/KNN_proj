@@ -27,8 +27,10 @@ import gym_super_mario_bros  # noqa: F401 — registers envs
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from nes_py.wrappers import JoypadSpace
 
+from smb_ram_wrapper import make_ram_env
 
-AGENTS = ("random", "rightmove")
+
+AGENTS = ("random", "rightmove", "ppo")
 DEFAULT_WORLDS = tuple(range(1, 9))
 DEFAULT_STAGES = tuple(range(1, 5))
 GAME_OVER_EXTRA_STEPS = 45
@@ -56,6 +58,14 @@ def make_env(world: int, stage: int) -> Any:
 
 def get_base_env(env: Any) -> Any:
     return env.unwrapped
+
+
+def get_joypad_env(env: Any) -> Any:
+    """Walk wrappers to ``JoypadSpace`` (provides ``_action_map`` for NES button bytes)."""
+    cur: Any = env
+    while hasattr(cur, "env") and not hasattr(cur, "_action_map"):
+        cur = cur.env
+    return cur
 
 
 def capture_raw_screen(env: Any) -> np.ndarray:
@@ -116,6 +126,9 @@ class RunTask:
     output_dir: str
     max_steps: int
     seed: int | None
+    model_path: str | None = None
+    n_stack: int = 4
+    n_skip: int = 4
 
 
 def _run_folder_name(agent: str, world: int, stage: int, run_index: int) -> str:
@@ -145,7 +158,25 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
 
     rng = np.random.default_rng(effective_seed)
 
-    agent_fn = get_agent_fn(task.agent, rng)
+    use_ppo = task.agent == "ppo"
+    if use_ppo:
+        if not task.model_path:
+            raise ValueError("ppo agent requires model_path on RunTask")
+        from stable_baselines3 import PPO
+
+        model = PPO.load(task.model_path)
+        env = make_ram_env(
+            task.world,
+            task.stage,
+            n_stack=task.n_stack,
+            n_skip=task.n_skip,
+        )
+        agent_fn = None
+    else:
+        model = None
+        env = make_env(task.world, task.stage)
+        agent_fn = get_agent_fn(task.agent, rng)
+
     n_actions = len(SIMPLE_MOVEMENT)
 
     run_uuid = uuid.uuid4().hex[:8]
@@ -158,7 +189,6 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
     plat = platform.platform()
     py_ver = platform.python_version()
 
-    env = make_env(task.world, task.stage)
     # JoypadSpace.reset does not forward seed=; seed the base NESEnv + action space.
     get_base_env(env).seed(effective_seed)
     env.action_space.seed(effective_seed)
@@ -176,11 +206,21 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         return f"frame_{run_uuid}_{i:06d}.jpg"
 
     while frame_idx < task.max_steps:
-        action_index = agent_fn(n_actions)
+        rgb_before = capture_raw_screen(env)
+        if use_ppo:
+            action_index = int(model.predict(obs, deterministic=True)[0])
+        else:
+            assert agent_fn is not None
+            action_index = agent_fn(n_actions)
         fname = filename_for(frame_idx)
-        save_frame_jpg(run_dir / fname, obs)
+        save_frame_jpg(run_dir / fname, rgb_before)
 
-        next_obs, reward, done, info = env.step(action_index)
+        step_out = env.step(action_index)
+        if len(step_out) == 5:
+            next_obs, reward, terminated, truncated, info = step_out
+            done = bool(terminated or truncated)
+        else:
+            next_obs, reward, done, info = step_out
         if isinstance(next_obs, tuple):
             next_obs = next_obs[0]
 
@@ -205,7 +245,7 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
 
             # Terminal gameplay frame (death / pole)
             term_fname = filename_for(frame_idx)
-            save_frame_jpg(run_dir / term_fname, next_obs)
+            save_frame_jpg(run_dir / term_fname, capture_raw_screen(env))
             term_info = _json_safe_info(dict(info))
             frames_rows.append(
                 {
@@ -224,7 +264,7 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
             # GAME OVER: nes-py marks env done so gym cannot step(); advance raw emulator.
             if not flag_get:
                 base = get_base_env(env)
-                noop_byte = int(env._action_map[0])
+                noop_byte = int(get_joypad_env(env)._action_map[0])
                 for g in range(GAME_OVER_EXTRA_STEPS):
                     base._frame_advance(noop_byte)
                     raw = capture_raw_screen(env)
@@ -249,7 +289,7 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
 
     env.close()
 
-    run_json = {
+    run_json: dict[str, Any] = {
         "agent": task.agent,
         "environment": f"SuperMarioBros-{task.world}-{task.stage}-v0",
         "world": task.world,
@@ -268,6 +308,10 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         "seed_note": _seed_note(seed_source),
         "frames": frames_rows,
     }
+    if use_ppo:
+        run_json["ppo_model_path"] = task.model_path
+        run_json["ppo_n_stack"] = task.n_stack
+        run_json["ppo_n_skip"] = task.n_skip
 
     with open(run_dir / "run.json", "w", encoding="utf-8") as f:
         json.dump(run_json, f, indent=2)
@@ -288,6 +332,9 @@ def build_tasks(
     output_dir: Path,
     max_steps: int,
     replay_seed: int | None,
+    model_path: str | None,
+    n_stack: int,
+    n_skip: int,
 ) -> list[RunTask]:
     tasks: list[RunTask] = []
     for agent in agents:
@@ -303,6 +350,9 @@ def build_tasks(
                             output_dir=str(output_dir),
                             max_steps=max_steps,
                             seed=replay_seed,
+                            model_path=model_path if agent == "ppo" else None,
+                            n_stack=n_stack,
+                            n_skip=n_skip,
                         )
                     )
     return tasks
@@ -361,6 +411,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Exact RNG/env seed (copy from run.json 'seed'); omit to generate a random seed and log it",
     )
+    p.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Path to SB3 PPO .zip for the ppo agent (default: ./models/pre-trained-1.zip next to this script)",
+    )
+    p.add_argument(
+        "--n-stack",
+        type=int,
+        default=4,
+        help="RAM observation frame stack depth for ppo (must match the checkpoint; pre-trained-1 uses 4)",
+    )
+    p.add_argument(
+        "--n-skip",
+        type=int,
+        default=4,
+        help="RAM observation frame skip for ppo (must match the checkpoint; pre-trained-1 uses 4)",
+    )
     return p.parse_args()
 
 
@@ -368,6 +436,16 @@ def main() -> None:
     args = parse_args()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    script_dir = Path(__file__).resolve().parent
+    default_ppo_model = script_dir / "models" / "pre-trained-1.zip"
+    model_path: str | None = None
+    if "ppo" in args.agents:
+        mp = args.model_path if args.model_path is not None else default_ppo_model
+        mp = mp.resolve()
+        if not mp.is_file():
+            raise SystemExit(f"ppo agent: model file not found: {mp}")
+        model_path = str(mp)
 
     tasks = build_tasks(
         agents=args.agents,
@@ -377,6 +455,9 @@ def main() -> None:
         output_dir=output_dir,
         max_steps=args.max_steps,
         replay_seed=args.replay_seed,
+        model_path=model_path,
+        n_stack=args.n_stack,
+        n_skip=args.n_skip,
     )
 
     if not tasks:
