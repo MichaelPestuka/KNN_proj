@@ -215,6 +215,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Mario data collection (gym-super-mario-bros)
+data-generation/super-mario-bros/collected_data/
+
 ### TeX ###
 ## Core latex/pdflatex auxiliary files:
 *.aux

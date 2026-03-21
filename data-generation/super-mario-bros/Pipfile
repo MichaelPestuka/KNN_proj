@@ -1,0 +1,17 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+gym-super-mario-bros = "==7.4.0"
+gym = "==0.25.1"
+nes-py = "==8.2.1"
+numpy = "<2.0.0"
+pyglet = "<=1.5.21"
+pillow = "*"
+
+[requires]
+python_version = "3.12"
+
+[dev-packages]
