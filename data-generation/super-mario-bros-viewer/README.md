@@ -27,7 +27,7 @@ The official macOS installer usually includes Tk; use that `python3.12` for `pip
 From this directory, pass a **run folder** (the directory that contains `run.json`):
 
 ```bash
-pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_001
+pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_a1b2c3d4
 ```
 
 Playback uses **Play / Pause** and speeds **0.5×–10×** (about 60 fps at 1×). Drag the timeline to scrub.

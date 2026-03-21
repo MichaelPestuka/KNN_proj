@@ -6,7 +6,7 @@ Usage (from this directory):
   pipenv run python replay.py path/to/run_folder
 
 Example:
-  pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_001
+  pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_a1b2c3d4
 """
 
 from __future__ import annotations

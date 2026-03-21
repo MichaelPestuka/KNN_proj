@@ -2,8 +2,8 @@
 """
 Collect Super Mario Bros gameplay frames and actions using gym-super-mario-bros.
 
-Each run is stored under collected_data/<agent>_w<world>s<stage>_<counter>/ with
-JPG frames and run.json.
+Each run is stored under collected_data/<agent>_w<world>s<stage>_<8hex>/ with
+JPG frames and run.json (suffix matches run_id in run.json and frame filenames).
 """
 
 from __future__ import annotations
@@ -122,7 +122,6 @@ class RunTask:
     agent: str
     world: int
     stage: int
-    run_index: int
     output_dir: str
     max_steps: int
     seed: int | None
@@ -131,8 +130,8 @@ class RunTask:
     n_skip: int = 4
 
 
-def _run_folder_name(agent: str, world: int, stage: int, run_index: int) -> str:
-    return f"{agent}_w{world}s{stage}_{run_index:03d}"
+def _run_folder_name(agent: str, world: int, stage: int, run_short_id: str) -> str:
+    return f"{agent}_w{world}s{stage}_{run_short_id}"
 
 
 def _seed_note(seed_source: str) -> str:
@@ -180,7 +179,7 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
     n_actions = len(SIMPLE_MOVEMENT)
 
     run_uuid = uuid.uuid4().hex[:8]
-    folder_name = _run_folder_name(task.agent, task.world, task.stage, task.run_index)
+    folder_name = _run_folder_name(task.agent, task.world, task.stage, run_uuid)
     run_dir = Path(task.output_dir) / folder_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -340,13 +339,12 @@ def build_tasks(
     for agent in agents:
         for w in worlds:
             for s in stages:
-                for r in range(1, runs_per_combo + 1):
+                for _ in range(runs_per_combo):
                     tasks.append(
                         RunTask(
                             agent=agent,
                             world=w,
                             stage=s,
-                            run_index=r,
                             output_dir=str(output_dir),
                             max_steps=max_steps,
                             seed=replay_seed,
@@ -364,7 +362,7 @@ def parse_args() -> argparse.Namespace:
         "--agents",
         nargs="+",
         choices=list(AGENTS),
-        default=list(AGENTS),
+        default=["random", "ppo"],
         help="Agents to run",
     )
     p.add_argument(
@@ -402,7 +400,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-steps",
         type=int,
-        default=50000,
+        default=5000,
         help="Safety cap on steps per episode",
     )
     p.add_argument(

@@ -15,11 +15,9 @@ The `ppo` agent needs **Stable-Baselines3**, **PyTorch**, and **shimmy** (instal
 
 ```bash
 pipenv run python collect_data.py \
-  --agents random rightmove \
   --worlds 1 2 \
   --stages 1 2 3 4 \
   --runs-per-combo 1 \
-  --max-steps 50000 \
   --workers 4 \
   --output-dir ./collected_data
 ```
@@ -42,7 +40,7 @@ pipenv run python collect_data.py \
   --worlds 1 --stages 1 \
   --model-path ./models/pre-trained-1.zip \
   --n-stack 4 --n-skip 4 \
-  --max-steps 50000
+  --max-steps 5000
 ```
 
 `run.json` for PPO runs also includes `ppo_model_path`, `ppo_n_stack`, and `ppo_n_skip`.
@@ -55,11 +53,11 @@ The RAM grid (`smb_grid`), observation wrapper (`SMBRamWrapper`), and bundled ch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--agents` | `random` `rightmove` | Which agents: `random`, `rightmove`, `ppo` |
+| `--agents` | `random` `ppo` | Which agents: `random`, `rightmove`, `ppo` |
 | `--worlds` | `1` … `8` | Worlds to play |
 | `--stages` | `1` … `4` | Stages per world |
-| `--runs-per-combo` | `1` | Runs per (agent, world, stage); folder counter `001`, `002`, … |
-| `--max-steps` | `50000` | **Safety cap** on environment steps per episode. Stops the run early if reached (recorded as `outcome: max_steps` in `run.json`). Raise this if episodes are cut off too soon. |
+| `--runs-per-combo` | `1` | Runs per (agent, world, stage); each run gets a unique folder suffix (8-char hex, same as `run_id` in `run.json`) |
+| `--max-steps` | `5000` | **Safety cap** on environment steps per episode. Stops the run early if reached (recorded as `outcome: max_steps` in `run.json`). Raise this if episodes are cut off too soon. |
 | `--replay-seed` | *(none)* | Exact RNG/env seed (copy `seed` from a previous `run.json`). If omitted, a random 31-bit seed is generated, logged as `seed` with `seed_source: generated_at_run_start`, and you can replay with `--replay-seed <that value>`. |
 | `--workers` | `1` | Parallel processes (`1` = sequential) |
 | `--output-dir` | `./collected_data` | Where run folders are written |
@@ -77,5 +75,5 @@ The replay viewer lives in a **separate** folder so it does not share the gym/co
 
 ```bash
 cd ../super-mario-bros-viewer
-pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_001
+pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_a1b2c3d4
 ```
