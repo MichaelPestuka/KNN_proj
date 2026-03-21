@@ -53,9 +53,9 @@ The RAM grid (`smb_grid`), observation wrapper (`SMBRamWrapper`), and bundled ch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--runs-random` | `5` | Runs per (world, stage) for the random agent; `0` skips |
+| `--runs-random` | `10` | Runs per (world, stage) for the random agent; `0` skips |
 | `--runs-ppo` | `1` | Runs per (world, stage) for PPO; `0` skips |
-| `--runs-combined` | `20` | Runs per (world, stage) for combined; `0` skips |
+| `--runs-combined` | `100` | Runs per (world, stage) for combined; `0` skips |
 | `--worlds` | `1` | Worlds to play (`1`–`8`) |
 | `--stages` | `1` | Stages per world (`1`–`4`) |
 | `--max-steps` | `10000` | **Safety cap** on environment steps per episode. Stops the run early if reached (recorded as `outcome: max_steps` in `run.json`). Raise this if episodes are cut off too soon. |
