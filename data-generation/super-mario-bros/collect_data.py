@@ -30,7 +30,7 @@ from nes_py.wrappers import JoypadSpace
 from smb_ram_wrapper import make_ram_env
 
 
-AGENTS = ("random", "rightmove", "ppo")
+AGENTS = ("random", "ppo")
 DEFAULT_WORLDS = tuple(range(1, 9))
 DEFAULT_STAGES = tuple(range(1, 5))
 GAME_OVER_EXTRA_STEPS = 45
@@ -99,23 +99,9 @@ def make_random_agent(rng: np.random.Generator) -> Callable[[int], int]:
     return act
 
 
-def make_rightmove_agent(rng: np.random.Generator) -> Callable[[int], int]:
-    """Bias toward moving right + jump / run."""
-
-    def act(n_actions: int) -> int:
-        preferred = (1, 2, 3, 4)  # right, right+A, right+B, right+A+B
-        if rng.random() < 0.75:
-            return int(rng.choice(preferred))
-        return int(rng.integers(0, n_actions))
-
-    return act
-
-
 def get_agent_fn(name: str, rng: np.random.Generator) -> Callable[[int], int]:
     if name == "random":
         return make_random_agent(rng)
-    if name == "rightmove":
-        return make_rightmove_agent(rng)
     raise ValueError(f"Unknown agent: {name}")
 
 

@@ -29,7 +29,6 @@ Outputs one folder per run under `collected_data/` (see `run.json` + JPEG frames
 | Agent | Behavior |
 |-------|----------|
 | `random` | Uniform random action over the discrete action set. |
-| `rightmove` | Strong bias toward moving right and jumping. |
 | `ppo` | Pretrained [Stable-Baselines3](https://stable-baselines3.readthedocs.io/) PPO policy. It observes a **RAM-derived tile grid** (see `smb_utils.py` / `smb_ram_wrapper.py`); **saved frames are still full RGB** from the emulator, same as the other agents. |
 
 For `ppo`, the default checkpoint is `models/pre-trained-1.zip` (RAM stack `n_stack=4`, `n_skip=4`). Override the path or stack settings if you use another SB3 `.zip` trained with the same observation wrapper:
@@ -53,7 +52,7 @@ The RAM grid (`smb_grid`), observation wrapper (`SMBRamWrapper`), and bundled ch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--agents` | `random` `ppo` | Which agents: `random`, `rightmove`, `ppo` |
+| `--agents` | `random` `ppo` | Which agents: `random`, `ppo` |
 | `--worlds` | `1` … `8` | Worlds to play |
 | `--stages` | `1` … `4` | Stages per world |
 | `--runs-per-combo` | `1` | Runs per (agent, world, stage); each run gets a unique folder suffix (8-char hex, same as `run_id` in `run.json`) |
