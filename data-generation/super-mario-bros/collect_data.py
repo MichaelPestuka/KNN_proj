@@ -485,16 +485,18 @@ def main() -> None:
             raise SystemExit(f"--runs-{k.replace('_', '-')} must be >= 0, got {v}")
 
     if runs_per_agent["ppo"] > 0 or runs_per_agent["combined"] > 0:
-        mp = args.model_path if args.model_path is not None else default_ppo_model
-        mp = mp.resolve()
-        if not mp.is_file():
+        model_file = args.model_path if args.model_path is not None else default_ppo_model
+        model_file = model_file.resolve()
+        if not model_file.is_file():
             need = []
             if runs_per_agent["ppo"] > 0:
                 need.append("ppo")
             if runs_per_agent["combined"] > 0:
                 need.append("combined")
-            raise SystemExit(f"model file required for {', '.join(need)} runs: not found: {mp}")
-        model_path = str(mp)
+            raise SystemExit(
+                f"model file required for {', '.join(need)} runs: not found: {model_file}"
+            )
+        model_path = str(model_file)
 
     tasks = build_tasks(
         runs_per_agent=runs_per_agent,
