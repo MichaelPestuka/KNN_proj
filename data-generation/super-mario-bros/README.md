@@ -9,7 +9,7 @@ cd data-generation/super-mario-bros
 pipenv install --python 3.12   # or 3.10 / 3.11
 ```
 
-The `ppo` agent needs **Stable-Baselines3**, **PyTorch**, and **shimmy** (installed via Pipfile) to load the pretrained `.zip` alongside the usual `gym-super-mario-bros` stack.
+The `ppo` and `combined` agents need **Stable-Baselines3**, **PyTorch**, and **shimmy** (installed via Pipfile) to load the pretrained `.zip` alongside the usual `gym-super-mario-bros` stack.
 
 ## Collect data
 
@@ -30,8 +30,9 @@ Outputs one folder per run under `collected_data/` (see `run.json` + JPEG frames
 |-------|----------|
 | `random` | Uniform random action over the discrete action set. |
 | `ppo` | Pretrained [Stable-Baselines3](https://stable-baselines3.readthedocs.io/) PPO policy. It observes a **RAM-derived tile grid** (see `smb_utils.py` / `smb_ram_wrapper.py`); **saved frames are still full RGB** from the emulator, same as the other agents. |
+| `combined` | Same RAM env and PPO checkpoint as `ppo`, but control alternates in **5–40 frame** stretches: at the start of each stretch, **PPO** vs the same **random** policy as `random` is chosen with **2:1** odds favoring PPO for that entire stretch. |
 
-For `ppo`, the default checkpoint is `models/pre-trained-1.zip` (RAM stack `n_stack=4`, `n_skip=4`). Override the path or stack settings if you use another SB3 `.zip` trained with the same observation wrapper:
+For `ppo` and `combined`, the default checkpoint is `models/pre-trained-1.zip` (RAM stack `n_stack=4`, `n_skip=4`). Override the path or stack settings if you use another SB3 `.zip` trained with the same observation wrapper:
 
 ```bash
 pipenv run python collect_data.py \
@@ -42,7 +43,7 @@ pipenv run python collect_data.py \
   --max-steps 5000
 ```
 
-`run.json` for PPO runs also includes `ppo_model_path`, `ppo_n_stack`, and `ppo_n_skip`.
+`run.json` for `ppo` and `combined` also includes `ppo_model_path`, `ppo_n_stack`, and `ppo_n_skip`. `combined` adds `combined_period_min_frames` / `combined_period_max_frames` (currently 5 and 40) and `combined_ppo_period_prob` (currently 2/3).
 
 #### Attribution (PPO / RAM observation code)
 
@@ -52,7 +53,7 @@ The RAM grid (`smb_grid`), observation wrapper (`SMBRamWrapper`), and bundled ch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--agents` | `random` `ppo` | Which agents: `random`, `ppo` |
+| `--agents` | `random` `ppo` | Which agents: `random`, `ppo`, `combined` |
 | `--worlds` | `1` … `8` | Worlds to play |
 | `--stages` | `1` … `4` | Stages per world |
 | `--runs-per-combo` | `1` | Runs per (agent, world, stage); each run gets a unique folder suffix (8-char hex, same as `run_id` in `run.json`) |
@@ -60,7 +61,7 @@ The RAM grid (`smb_grid`), observation wrapper (`SMBRamWrapper`), and bundled ch
 | `--replay-seed` | *(none)* | Exact RNG/env seed (copy `seed` from a previous `run.json`). If omitted, a random 31-bit seed is generated, logged as `seed` with `seed_source: generated_at_run_start`, and you can replay with `--replay-seed <that value>`. |
 | `--workers` | `1` | Parallel processes (`1` = sequential) |
 | `--output-dir` | `./collected_data` | Where run folders are written |
-| `--model-path` | `./models/pre-trained-1.zip` when `ppo` is selected | SB3 PPO checkpoint (`.zip`). Required file must exist if `--agents` includes `ppo` (defaults to the path next to this script). |
+| `--model-path` | `./models/pre-trained-1.zip` when `ppo` or `combined` is selected | SB3 PPO checkpoint (`.zip`). Required file must exist if `--agents` includes `ppo` or `combined` (defaults to the path next to this script). |
 | `--n-stack` | `4` | RAM observation: number of stacked frames (must match the checkpoint). |
 | `--n-skip` | `4` | RAM observation: frame stride between stacked slices (must match the checkpoint). |
 

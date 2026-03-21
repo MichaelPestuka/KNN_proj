@@ -30,10 +30,13 @@ from nes_py.wrappers import JoypadSpace
 from smb_ram_wrapper import make_ram_env
 
 
-AGENTS = ("random", "ppo")
+AGENTS = ("random", "ppo", "combined")
 DEFAULT_WORLDS = tuple(range(1, 9))
 DEFAULT_STAGES = tuple(range(1, 5))
 GAME_OVER_EXTRA_STEPS = 45
+COMBINED_PERIOD_MIN_FRAMES = 5
+COMBINED_PERIOD_MAX_FRAMES = 40
+COMBINED_PPO_PERIOD_PROB = 2.0 / 3.0  # 2:1 PPO vs random stretches
 
 
 def _json_safe_info(info: dict[str, Any]) -> dict[str, Any]:
@@ -154,9 +157,10 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
     rng = np.random.default_rng(effective_seed)
 
     use_ppo = task.agent == "ppo"
-    if use_ppo:
+    use_combined = task.agent == "combined"
+    if use_ppo or use_combined:
         if not task.model_path:
-            raise ValueError("ppo agent requires model_path on RunTask")
+            raise ValueError(f"{task.agent} agent requires model_path on RunTask")
         from stable_baselines3 import PPO
 
         model = PPO.load(task.model_path)
@@ -167,8 +171,27 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
             n_skip=task.n_skip,
         )
         agent_fn = None
+        combined_action: Callable[[Any, int], int] | None = None
+        if use_combined:
+            random_act = make_random_agent(rng)
+            period_left = 0
+            ppo_period = True
+
+            def combined_action(obs: Any, n_actions: int) -> int:
+                nonlocal period_left, ppo_period
+                if period_left <= 0:
+                    period_left = int(
+                        rng.integers(COMBINED_PERIOD_MIN_FRAMES, COMBINED_PERIOD_MAX_FRAMES + 1)
+                    )
+                    ppo_period = bool(rng.random() < COMBINED_PPO_PERIOD_PROB)
+                period_left -= 1
+                if ppo_period:
+                    return int(model.predict(obs, deterministic=True)[0])
+                return random_act(n_actions)
+
     else:
         model = None
+        combined_action = None
         env = make_env(task.world, task.stage)
         agent_fn = get_agent_fn(task.agent, rng)
 
@@ -202,7 +225,9 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
 
     while frame_idx < task.max_steps:
         rgb_before = capture_raw_screen(env)
-        if use_ppo:
+        if combined_action is not None:
+            action_index = combined_action(obs, n_actions)
+        elif use_ppo:
             action_index = int(model.predict(obs, deterministic=True)[0])
         else:
             assert agent_fn is not None
@@ -303,10 +328,14 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         "seed_note": _seed_note(seed_source),
         "frames": frames_rows,
     }
-    if use_ppo:
+    if use_ppo or use_combined:
         run_json["ppo_model_path"] = task.model_path
         run_json["ppo_n_stack"] = task.n_stack
         run_json["ppo_n_skip"] = task.n_skip
+    if use_combined:
+        run_json["combined_period_min_frames"] = COMBINED_PERIOD_MIN_FRAMES
+        run_json["combined_period_max_frames"] = COMBINED_PERIOD_MAX_FRAMES
+        run_json["combined_ppo_period_prob"] = COMBINED_PPO_PERIOD_PROB
 
     with open(run_dir / "run.json", "w", encoding="utf-8") as f:
         json.dump(run_json, f, indent=2)
@@ -344,7 +373,7 @@ def build_tasks(
                             output_dir=str(output_dir),
                             max_steps=max_steps,
                             seed=replay_seed,
-                            model_path=model_path if agent == "ppo" else None,
+                            model_path=model_path if agent in ("ppo", "combined") else None,
                             n_stack=n_stack,
                             n_skip=n_skip,
                         )
@@ -409,19 +438,19 @@ def parse_args() -> argparse.Namespace:
         "--model-path",
         type=Path,
         default=None,
-        help="Path to SB3 PPO .zip for the ppo agent (default: ./models/pre-trained-1.zip next to this script)",
+        help="Path to SB3 PPO .zip for ppo / combined (default: ./models/pre-trained-1.zip next to this script)",
     )
     p.add_argument(
         "--n-stack",
         type=int,
         default=4,
-        help="RAM observation frame stack depth for ppo (must match the checkpoint; pre-trained-1 uses 4)",
+        help="RAM observation frame stack depth for ppo / combined (must match the checkpoint; pre-trained-1 uses 4)",
     )
     p.add_argument(
         "--n-skip",
         type=int,
         default=4,
-        help="RAM observation frame skip for ppo (must match the checkpoint; pre-trained-1 uses 4)",
+        help="RAM observation frame skip for ppo / combined (must match the checkpoint; pre-trained-1 uses 4)",
     )
     return p.parse_args()
 
@@ -434,11 +463,12 @@ def main() -> None:
     script_dir = Path(__file__).resolve().parent
     default_ppo_model = script_dir / "models" / "pre-trained-1.zip"
     model_path: str | None = None
-    if "ppo" in args.agents:
+    if "ppo" in args.agents or "combined" in args.agents:
         mp = args.model_path if args.model_path is not None else default_ppo_model
         mp = mp.resolve()
         if not mp.is_file():
-            raise SystemExit(f"ppo agent: model file not found: {mp}")
+            need = ", ".join(a for a in ("ppo", "combined") if a in args.agents)
+            raise SystemExit(f"model file required for --agents {need}: not found: {mp}")
         model_path = str(mp)
 
     tasks = build_tasks(
