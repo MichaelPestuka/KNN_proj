@@ -31,8 +31,10 @@ from smb_ram_wrapper import make_ram_env
 
 
 AGENTS = ("random", "ppo", "combined")
-DEFAULT_WORLDS = tuple(range(1, 9))
-DEFAULT_STAGES = tuple(range(1, 5))
+DEFAULT_WORLDS = (1,)
+DEFAULT_STAGES = (1,)
+DEFAULT_MAX_STEPS = 10_000
+DEFAULT_RUNS_PER_AGENT = {"random": 5, "ppo": 1, "combined": 20}
 GAME_OVER_EXTRA_STEPS = 45
 COMBINED_PERIOD_MIN_FRAMES = 5
 COMBINED_PERIOD_MAX_FRAMES = 40
@@ -349,10 +351,9 @@ def _worker_star(args: tuple[RunTask,]) -> dict[str, Any]:
 
 
 def build_tasks(
-    agents: Iterable[str],
+    runs_per_agent: dict[str, int],
     worlds: Iterable[int],
     stages: Iterable[int],
-    runs_per_combo: int,
     output_dir: Path,
     max_steps: int,
     replay_seed: int | None,
@@ -361,10 +362,13 @@ def build_tasks(
     n_skip: int,
 ) -> list[RunTask]:
     tasks: list[RunTask] = []
-    for agent in agents:
+    for agent in AGENTS:
+        n = runs_per_agent.get(agent, 0)
+        if n <= 0:
+            continue
         for w in worlds:
             for s in stages:
-                for _ in range(runs_per_combo):
+                for _ in range(n):
                     tasks.append(
                         RunTask(
                             agent=agent,
@@ -384,31 +388,39 @@ def build_tasks(
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Collect Mario frames + actions (gym-super-mario-bros)")
     p.add_argument(
-        "--agents",
-        nargs="+",
-        choices=list(AGENTS),
-        default=["random", "ppo"],
-        help="Agents to run",
+        "--runs-random",
+        type=int,
+        default=DEFAULT_RUNS_PER_AGENT["random"],
+        metavar="N",
+        help="Runs per (world, stage) for random agent; 0 skips (default: %(default)s)",
+    )
+    p.add_argument(
+        "--runs-ppo",
+        type=int,
+        default=DEFAULT_RUNS_PER_AGENT["ppo"],
+        metavar="N",
+        help="Runs per (world, stage) for PPO agent; 0 skips (default: %(default)s)",
+    )
+    p.add_argument(
+        "--runs-combined",
+        type=int,
+        default=DEFAULT_RUNS_PER_AGENT["combined"],
+        metavar="N",
+        help="Runs per (world, stage) for combined agent; 0 skips (default: %(default)s)",
     )
     p.add_argument(
         "--worlds",
         nargs="+",
         type=int,
         default=list(DEFAULT_WORLDS),
-        help="World numbers 1-8",
+        help="World numbers 1-8 (default: %(default)s)",
     )
     p.add_argument(
         "--stages",
         nargs="+",
         type=int,
         default=list(DEFAULT_STAGES),
-        help="Stage numbers 1-4",
-    )
-    p.add_argument(
-        "--runs-per-combo",
-        type=int,
-        default=1,
-        help="Number of runs per (agent, world, stage)",
+        help="Stage numbers 1-4 (default: %(default)s)",
     )
     p.add_argument(
         "--output-dir",
@@ -425,8 +437,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-steps",
         type=int,
-        default=5000,
-        help="Safety cap on steps per episode",
+        default=DEFAULT_MAX_STEPS,
+        help="Safety cap on steps per episode (default: %(default)s)",
     )
     p.add_argument(
         "--replay-seed",
@@ -463,19 +475,31 @@ def main() -> None:
     script_dir = Path(__file__).resolve().parent
     default_ppo_model = script_dir / "models" / "pre-trained-1.zip"
     model_path: str | None = None
-    if "ppo" in args.agents or "combined" in args.agents:
+    runs_per_agent = {
+        "random": args.runs_random,
+        "ppo": args.runs_ppo,
+        "combined": args.runs_combined,
+    }
+    for k, v in runs_per_agent.items():
+        if v < 0:
+            raise SystemExit(f"--runs-{k.replace('_', '-')} must be >= 0, got {v}")
+
+    if runs_per_agent["ppo"] > 0 or runs_per_agent["combined"] > 0:
         mp = args.model_path if args.model_path is not None else default_ppo_model
         mp = mp.resolve()
         if not mp.is_file():
-            need = ", ".join(a for a in ("ppo", "combined") if a in args.agents)
-            raise SystemExit(f"model file required for --agents {need}: not found: {mp}")
+            need = []
+            if runs_per_agent["ppo"] > 0:
+                need.append("ppo")
+            if runs_per_agent["combined"] > 0:
+                need.append("combined")
+            raise SystemExit(f"model file required for {', '.join(need)} runs: not found: {mp}")
         model_path = str(mp)
 
     tasks = build_tasks(
-        agents=args.agents,
+        runs_per_agent=runs_per_agent,
         worlds=args.worlds,
         stages=args.stages,
-        runs_per_combo=args.runs_per_combo,
         output_dir=output_dir,
         max_steps=args.max_steps,
         replay_seed=args.replay_seed,

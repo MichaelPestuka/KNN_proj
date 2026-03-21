@@ -17,7 +17,7 @@ The `ppo` and `combined` agents need **Stable-Baselines3**, **PyTorch**, and **s
 pipenv run python collect_data.py \
   --worlds 1 2 \
   --stages 1 2 3 4 \
-  --runs-per-combo 1 \
+  --runs-random 1 --runs-ppo 1 --runs-combined 1 \
   --workers 4 \
   --output-dir ./collected_data
 ```
@@ -36,7 +36,7 @@ For `ppo` and `combined`, the default checkpoint is `models/pre-trained-1.zip` (
 
 ```bash
 pipenv run python collect_data.py \
-  --agents ppo \
+  --runs-random 0 --runs-combined 0 \
   --worlds 1 --stages 1 \
   --model-path ./models/pre-trained-1.zip \
   --n-stack 4 --n-skip 4 \
@@ -53,15 +53,16 @@ The RAM grid (`smb_grid`), observation wrapper (`SMBRamWrapper`), and bundled ch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--agents` | `random` `ppo` | Which agents: `random`, `ppo`, `combined` |
-| `--worlds` | `1` … `8` | Worlds to play |
-| `--stages` | `1` … `4` | Stages per world |
-| `--runs-per-combo` | `1` | Runs per (agent, world, stage); each run gets a unique folder suffix (8-char hex, same as `run_id` in `run.json`) |
-| `--max-steps` | `5000` | **Safety cap** on environment steps per episode. Stops the run early if reached (recorded as `outcome: max_steps` in `run.json`). Raise this if episodes are cut off too soon. |
+| `--runs-random` | `5` | Runs per (world, stage) for the random agent; `0` skips |
+| `--runs-ppo` | `1` | Runs per (world, stage) for PPO; `0` skips |
+| `--runs-combined` | `20` | Runs per (world, stage) for combined; `0` skips |
+| `--worlds` | `1` | Worlds to play (`1`–`8`) |
+| `--stages` | `1` | Stages per world (`1`–`4`) |
+| `--max-steps` | `10000` | **Safety cap** on environment steps per episode. Stops the run early if reached (recorded as `outcome: max_steps` in `run.json`). Raise this if episodes are cut off too soon. |
 | `--replay-seed` | *(none)* | Exact RNG/env seed (copy `seed` from a previous `run.json`). If omitted, a random 31-bit seed is generated, logged as `seed` with `seed_source: generated_at_run_start`, and you can replay with `--replay-seed <that value>`. |
 | `--workers` | `1` | Parallel processes (`1` = sequential) |
 | `--output-dir` | `./collected_data` | Where run folders are written |
-| `--model-path` | `./models/pre-trained-1.zip` when `ppo` or `combined` is selected | SB3 PPO checkpoint (`.zip`). Required file must exist if `--agents` includes `ppo` or `combined` (defaults to the path next to this script). |
+| `--model-path` | `./models/pre-trained-1.zip` when PPO or combined runs are requested | SB3 PPO checkpoint (`.zip`). Required file must exist when `--runs-ppo` or `--runs-combined` is positive (defaults to the path next to this script). |
 | `--n-stack` | `4` | RAM observation: number of stacked frames (must match the checkpoint). |
 | `--n-skip` | `4` | RAM observation: frame stride between stacked slices (must match the checkpoint). |
 
