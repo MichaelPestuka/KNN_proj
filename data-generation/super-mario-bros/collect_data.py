@@ -83,8 +83,18 @@ def save_frame_jpg(path: Path, rgb: np.ndarray) -> None:
 
 
 def make_random_agent(rng: np.random.Generator) -> Callable[[int], int]:
+    """Uniform random discrete action; hold each choice for 2–20 frames."""
+
+    hold_left = 0
+    current = 0
+
     def act(n_actions: int) -> int:
-        return int(rng.integers(0, n_actions))
+        nonlocal hold_left, current
+        if hold_left <= 0:
+            hold_left = int(rng.integers(2, 21))
+            current = int(rng.integers(0, n_actions))
+        hold_left -= 1
+        return current
 
     return act
 
