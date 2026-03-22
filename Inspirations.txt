@@ -1,0 +1,82 @@
+GameGAN (2020)
+Hra: Pacman
+Model: GAN (Neni difuzni)
+paper: https://openaccess.thecvf.com/content_CVPR_2020/papers/Kim_Learning_to_Simulate_Dynamic_Environments_With_GameGAN_CVPR_2020_paper.pdf
+Repo: https://github.com/nv-tlabs/GameGAN_code
+rozliseni: 360p
+
+Google Genie (2023)
+Hra: Vsechno co existuje idk
+model: Video Encoder -> transformer -> decoder
+paper: https://openreview.net/pdf?id=bJbSbJskOS
+neoficialni repo: https://github.com/myscience/open-genie
+rozlieni: 360p
+poznamky: Trenuji pouze na neanotovanych datech, pro nas nejspise nerealne
+
+DIAMOND (2024)
+Hra: Atari hry, CS:GO
+model: Difuzni model s reward funkci (?)
+paper: https://proceedings.neurips.cc/paper_files/paper/2024/file/6bdde0373d53d4a501249547084bed43-Paper-Conference.pdf
+repo: https://github.com/eloialonso/diamond
+poznamky: mozna pouzitelne, chce vic prozkoumat jak funguje model, pouzitelne checkpointy na vyzkouseni
+rozliseni: 280x150
+
+PlayGen (2024)
+hry: mario, Doom
+model: VAE + DiT + diffusion forcing
+paper: https://arxiv.org/pdf/2412.00887
+repo: https://github.com/GreatX3/Playable-Game-Generation
+poznamky: Real time na RTX2060, mozna pouzitelne
+rozliseni 128x128
+
+MarioVGG (2024)
+hra: mario
+model: Pretrained Text-to-video model, kde je akce zadana jako text prompt
+paper: https://github.com/Virtual-Protocol/mario-videogamegen/blob/main/static/pdfs/VideoGameGen.pdf
+repo: https://github.com/Virtual-Protocol/mario-videogamegen
+poznamky: shit rozliseni, asi nepouzitelne
+rozliseni: 64x48
+
+GameNGen (2024)
+hra: doom
+model: Difuzni model, akce a predchozi framy jako conditioning (treba jeste prozkoumat)
+paper: https://arxiv.org/pdf/2408.14837
+neoficialni repo: https://github.com/arnaudstiegler/gameNgen-repro
+rozliseni: 160x120
+
+Oasis (2024)
+hra: minecraft
+model: VAE + DiT
+repo: https://github.com/etched-ai/open-oasis
+rozliseni: 720p
+
+GameGen-X (2024)
+hra: vsechno mozne
+model: VAE, DiT, InstructNet (Varianta controlnetu?)
+paper: https://arxiv.org/pdf/2411.00769
+repo: https://github.com/GameGen-X/GameGen-X
+rozliseni: 720p
+poznamky: potencialne zajimavy model
+
+GAIA-1 (2023)
+hra: rizeni auta
+model: text, image, action encoder -> masking transformer -> video decoder
+paper: https://arxiv.org/pdf/2309.17080
+repo: neni
+poznamky: asi useless, divny model
+
+Gamefactory (2025)
+hra: vytvari nove podle promptu
+model: Pretrain difuzni, enkodovani akci naucene na minecraft datasetu
+paper: https://arxiv.org/pdf/2501.08325
+repo: https://github.com/KlingAIResearch/GameFactory
+poznamky: nevim jak moc uzitecne, ale je to cool
+
+The Matrix (2024)
+hra: hocico
+model: Dit, akce se merguji co 2 difuzni bloky pomoci cross attention
+paper: https://arxiv.org/pdf/2412.03568
+repo: neni
+poznamka: asi taky neuzitecne
+
+
