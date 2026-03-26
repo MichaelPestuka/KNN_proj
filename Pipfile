@@ -4,10 +4,8 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pillow = "*"
-numpy = "*"
-
-[requires]
-python_version = "3.12"
 
 [dev-packages]
+
+[requires]
+python_version = "3.14"

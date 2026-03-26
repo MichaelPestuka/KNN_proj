@@ -32,6 +32,55 @@ pipenv run python replay.py ../super-mario-bros/collected_data/random_w1s1_a1b2c
 
 Playback uses **Play / Pause** and speeds **0.5×–10×** (about 60 fps at 1×). Drag the timeline to scrub.
 
+## Plot Visited Points (Heatmap)
+
+This folder also contains a script for visualizing where Mario went during your
+training runs.
+
+- `plot_visited_points.py` overlays visited `(x_pos, y_pos)` points onto
+  `SuperMarioBrosMap1-1.png`.
+- By default it renders a heatmap and auto-discovers all
+  `../super-mario-bros/collected_data/**/run.json`.
+- Default output: `../super-mario-bros/collected_data/_all_runs_heatmap.png`.
+
+Generate the heatmap for all runs:
+
+```bash
+pipenv run python3 plot_visited_points.py
+```
+
+Quick iteration (cap number of runs):
+
+```bash
+pipenv run python3 plot_visited_points.py --max-runs 200
+```
+
+Choose output path:
+
+```bash
+pipenv run python3 plot_visited_points.py --output my_heatmap.png
+```
+
+Optional rendering modes:
+
+```bash
+# Heatmap (default)
+pipenv run python3 plot_visited_points.py --mode heatmap
+
+# Per-frame dots instead of heatmap
+pipenv run python3 plot_visited_points.py --mode dots --alpha 0.05 --radius 1
+```
+
+If you want per-run colors instead of monochrome/gray:
+
+```bash
+pipenv run python3 plot_visited_points.py --colors
+```
+
+If the heatmap is too faint or too saturated, tune:
+`--heatmap-max-alpha`, `--heatmap-percentile`, `--heatmap-gamma`,
+`--heatmap-blur-radius`, and `--heatmap-downsample`.
+
 ## Why a separate folder?
 
 The [`super-mario-bros`](../super-mario-bros/) environment is for data collection (gym, `numpy<2`, etc.). The viewer only needs Pillow and a Tk-capable Python. Keeping it here avoids tying collection to GUI/Tk and lets you use Homebrew’s `python-tk` for the viewer venv only.
