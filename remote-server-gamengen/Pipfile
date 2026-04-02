@@ -1,0 +1,28 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[[source]]
+url = "https://download.pytorch.org/whl/rocm6.4"
+verify_ssl = true
+name = "pytorch-rocm"
+
+[packages]
+tqdm = "*"
+numpy = "<2.0.0"
+transformers = "*"
+accelerate = "*"
+diffusers = "*"
+safetensors = "*"
+pillow = "*"
+# Required so pipenv can resolve torch's dependency (only published on pytorch-rocm index)
+pytorch-triton-rocm = {version = "==3.5.1", index = "pytorch-rocm"}
+torch = {version = "==2.9.1+rocm6.4", index = "pytorch-rocm"}
+torchvision = {version = "==0.24.1+rocm6.4", index = "pytorch-rocm"}
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"
+python_full_version = "3.12.3"
