@@ -14,3 +14,15 @@ DEFAULT_NUM_INFERENCE_STEPS = 10
 NUM_BUCKETS = 10
 
 PRETRAINED_MODEL_NAME_OR_PATH = "CompVis/stable-diffusion-v1-4"
+
+# Matches gym_super_mario_bros.actions.SIMPLE_MOVEMENT (no gym dep on inference side)
+SIMPLE_MOVEMENT = [
+    ["NOOP"],
+    ["right"],
+    ["right", "A"],
+    ["right", "B"],
+    ["right", "A", "B"],
+    ["A"],
+    ["left"],
+]
+NUM_ACTIONS = len(SIMPLE_MOVEMENT)

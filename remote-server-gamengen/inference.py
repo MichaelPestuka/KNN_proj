@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import argparse
 import random
 from pathlib import Path
-
 import numpy as np
 import torch
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
@@ -16,6 +17,7 @@ from config import (
     CFG_GUIDANCE_SCALE,
     DEFAULT_NUM_INFERENCE_STEPS,
     HEIGHT,
+    NUM_ACTIONS,
     WIDTH,
 )
 from model import load_model
@@ -244,20 +246,119 @@ def run_inference_img_conditioning_with_params(
     return image
 
 
-def build_batch_from_start_image() -> dict:
-    """All BUFFER_SIZE+1 frames are the same image (start.jpg)."""
-    img = Image.open(_START_IMAGE).convert("RGB")
-    transform = transforms.Compose(
+def _default_image_transform() -> transforms.Compose:
+    return transforms.Compose(
         [
             transforms.Resize((HEIGHT, WIDTH), interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
     )
+
+
+def build_batch_from_start_image() -> dict:
+    """All BUFFER_SIZE+1 frames are the same image (start.jpg)."""
+    img = Image.open(_START_IMAGE).convert("RGB")
+    transform = _default_image_transform()
     frame = transform(img)
     frames = torch.stack([frame] * (BUFFER_SIZE + 1)).unsqueeze(0).float()
     actions = torch.zeros(1, BUFFER_SIZE + 1, dtype=torch.long)
     return {"pixel_values": frames, "input_ids": actions}
+
+
+def build_batch_from_buffers(
+    frame_buffer: list[Image.Image],
+    action_buffer: list[int],
+    new_action: int,
+) -> dict:
+    """
+    Build a batch for one autoregressive step.
+
+    ``frame_buffer`` and ``action_buffer`` each have length BUFFER_SIZE (9).
+    The model consumes the first BUFFER_SIZE frames as conditioning; the
+    (BUFFER_SIZE+1)-th tensor slot is kept for shape compatibility (duplicate
+    of the last context frame), matching ``build_batch_from_start_image``.
+    """
+    if len(frame_buffer) != BUFFER_SIZE or len(action_buffer) != BUFFER_SIZE:
+        raise ValueError(
+            f"Expected {BUFFER_SIZE} frames and {BUFFER_SIZE} past actions, "
+            f"got {len(frame_buffer)} and {len(action_buffer)}"
+        )
+    transform = _default_image_transform()
+    tensors: list[torch.Tensor] = [transform(img) for img in frame_buffer]
+    tensors.append(tensors[-1].clone())
+    frames = torch.stack(tensors).unsqueeze(0).float()
+    actions = torch.tensor(action_buffer + [new_action], dtype=torch.long).unsqueeze(0)
+    return {"pixel_values": frames, "input_ids": actions}
+
+
+class InferenceEngine:
+    """Rolling-window GameNGen inference: 9 past frames/actions + current action -> next frame."""
+
+    def __init__(
+        self,
+        unet,
+        vae,
+        noise_scheduler,
+        action_embedding,
+        tokenizer,
+        text_encoder,
+        device: torch.device,
+        *,
+        start_image_path: Path | None = None,
+        num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
+        do_classifier_free_guidance: bool = False,
+        guidance_scale: float = CFG_GUIDANCE_SCALE,
+        skip_action_conditioning: bool = False,
+    ) -> None:
+        self._unet = unet
+        self._vae = vae
+        self._noise_scheduler = noise_scheduler
+        self._action_embedding = action_embedding
+        self._tokenizer = tokenizer
+        self._text_encoder = text_encoder
+        self._device = device
+        self._num_inference_steps = num_inference_steps
+        self._do_cfg = do_classifier_free_guidance
+        self._guidance_scale = guidance_scale
+        self._skip_action_conditioning = skip_action_conditioning
+
+        path = start_image_path or _START_IMAGE
+        start = Image.open(path).convert("RGB")
+        self._frame_buffer: list[Image.Image] = [start.copy() for _ in range(BUFFER_SIZE)]
+        self._action_buffer: list[int] = [0] * BUFFER_SIZE
+
+    def reset(self, start_image_path: Path | None = None) -> None:
+        path = start_image_path or _START_IMAGE
+        start = Image.open(path).convert("RGB")
+        self._frame_buffer = [start.copy() for _ in range(BUFFER_SIZE)]
+        self._action_buffer = [0] * BUFFER_SIZE
+
+    def step(self, action_index: int) -> Image.Image:
+        if action_index < 0 or action_index >= NUM_ACTIONS:
+            raise ValueError(f"action_index must be in [0, {NUM_ACTIONS}), got {action_index}")
+
+        batch = build_batch_from_buffers(
+            self._frame_buffer, self._action_buffer, action_index
+        )
+        img = run_inference_img_conditioning_with_params(
+            self._unet,
+            self._vae,
+            self._noise_scheduler,
+            self._action_embedding,
+            self._tokenizer,
+            self._text_encoder,
+            batch,
+            device=self._device,
+            skip_action_conditioning=self._skip_action_conditioning,
+            do_classifier_free_guidance=self._do_cfg,
+            guidance_scale=self._guidance_scale,
+            num_inference_steps=self._num_inference_steps,
+        )
+
+        self._frame_buffer = self._frame_buffer[1:] + [img]
+        self._action_buffer = self._action_buffer[1:] + [action_index]
+        return img
 
 
 def main(model_folder: str) -> None:
