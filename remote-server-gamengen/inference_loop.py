@@ -80,7 +80,7 @@ def main() -> None:
 
     sys.stderr.write(READY_LINE)
     sys.stderr.flush()
-    logger.info("Model ready; waiting for actions on stdin")
+    logger.info("Model ready; streaming with NOOP until stdin sends actions")
 
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
@@ -107,13 +107,6 @@ def main() -> None:
             eof_event.set()
 
     threading.Thread(target=action_reader, daemon=True).start()
-
-    # Wait for the first action to arrive before starting the loop so the GPU
-    # doesn't spin on the default (NOOP) while the client is still connecting.
-    eof_event.wait(timeout=600)
-    if eof_event.is_set() and latest_action == 0:
-        logger.info("EOF before any action; exiting")
-        return
 
     try:
         while not eof_event.is_set():
