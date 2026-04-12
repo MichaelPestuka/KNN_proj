@@ -58,6 +58,8 @@ In our enhanced dataset, this was increased to 17,05\% while also increasing the
 
 \section{ControlNet based}
 
+% @PRASA I AM GONNA NEED SOME ROLLOUTS AND THEIR GROUND TRUTH DATA FOLDERS TO INCLUDE THE MODEL IN EVALUATION SECTION, OR A GUIDE ON HOW TO RUN IT. HAVE NOT TRIED YET, MAYBE THE LLMS CAN FIGURE IT OUT
+
 \section{Interactive}
 
 Given our reliance on high-power cloud infastructure for training and inference we have created a client-server type application for trying out the model interactively, like a real game. Because this is just for testing purposes, it is in the form of a portable python GUI application which initiates an SSH session with our remote VPS, starts the inference process there and then streams JPEG encoded images back while user actions are streamed to the server.
@@ -68,6 +70,10 @@ Currently we do not have a remote iteractive application of the ControlNet based
 
 \section{Evaluation}
 
-While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. On of these is LPIPS (Learned Perceptual Image Patch Similarity, \footnote{\url{https://arxiv.org/abs/1801.03924}}), which is also cited in the GameNGen paper. This metric is also available from a PyPi package\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}.
+While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. On of these is LPIPS (Learned Perceptual Image Patch Similarity) \footnote{\url{https://arxiv.org/abs/1801.03924}}, which is also cited in the GameNGen paper. This metric is also available from a PyPi package from the authors of the paper\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}.
+
+We have employed both PSNR and LPIPS in an evaluation script, but currently our models generate images outside the scope of this kind of evaluation, failing to model primary game mechanics.
+
+% I WILL REDO THIS VALIDATION TOMMOROW ON BOTH THE OG DATA 250k AND SECOND GEN GAMENGEN MODEL
 
 \end{document}
