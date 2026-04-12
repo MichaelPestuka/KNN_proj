@@ -1,4 +1,4 @@
-\documentclass[a4paper]{article}
+\documentclass[twocolumn,a4paper]{article}
 \usepackage[top=1cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
 \usepackage{graphicx} % Required for inserting images
 \usepackage{hyperref} % Required for \url command
@@ -25,18 +25,33 @@
 
 \section{Data generation}
 
-bla source for emulator \footnote{\url{https://github.com/Kautenja/gym-super-mario-bros}}, AI \footnote{\url{https://github.com/yumouwei/super-mario-bros-reinforcement-learning}}
+For generating the training data, a Mario Brothers emulator \footnote{\url{https://github.com/Kautenja/gym-super-mario-bros}} was used, as the Gymnasium framework did not have the NES game we were looking for. For controlling the game while generating the data, 3 strategies were originally used. A fully random strategy, with a uniform distribution of all the provided \texttt{SIMPLE\_MOVEMENT} actions and some action stickieness over several frames. The second strategy relyed on a pre-traing AI\footnote{\url{https://github.com/yumouwei/super-mario-bros-reinforcement-learning}} with the third being a combination, with random length few second periods of one or the other.
 
-see figure \ref{fig:level_coverage}
+This combination lead to a very good coverage of the first level of the game, see figure \ref{fig:level_coverage}.
 
-first try data was uneven
-
-\begin{figure}
+\begin{figure*}
   \centering
-  \includegraphics[width=\textwidth]{figures/mario_w1s1_visited_points_overlay_1211runs.png}
-  \caption{A map of level coverage after 1 run of optimal policy, 110 runs of random policy and 1100 runs of combined policy.}
+  \includegraphics[width=\textwidth]{figures/mario_w1s1_original_dataset_heatmap_overlay_1101runs.png}
+  \caption{A map of level coverage}
   \label{fig:level_coverage}
-\end{figure}
+\end{figure*}
+
+The character trajectories were also very varied, see \ref{fig:level_trajectories}.
+
+% ONE OF THESE TWO FIGURES CAN PROBABLY GO. WHICH DO YOU LIKE BETTER? 
+
+\begin{figure*}
+  \centering
+  \includegraphics[width=\textwidth]{figures/mario_w1s1_original_dataset_dots_overlay_1101runs.png}
+  \caption{A map of level trajectories}
+  \label{fig:level_trajectories}
+\end{figure*}
+
+The first attempt training mix (seen in these figures) was 1000 runs of combined, 100 of fully random and only one run off the optimal AI policy, given that was pixel perfect repeatable. This did not turn out to be and optimal mix, along with another issue not entirely visible from the validation images shown here.
+
+The \texttt{SIMPLE\_MOVEMENT} control mechanism provided by the emulator does allow for movement left and right, but only has combinations with the \texttt{A} and \texttt{B} keys for the right, so 4 of the possible 7 actions move the game character forward. This was also exasperated by the AI strategy, which used these actions even more than the uniform random distribution. This resulted in our original training dataset of 665 816 images only containing 5,42\% left actions. As a consequence of these inbalances, our first round of models continued moving the character forward even without user input.
+
+In our enhanced dataset, this was increased to 17,05\% while also increasing the number of frames where no action was taken from 14,81\% to 50,05\%. The impact of this change on our second generation of model checkpoints is not yet known.
 
 \section{Interactive}
 
