@@ -23,6 +23,9 @@
 
 \maketitle
 
+\section{Problem}
+The goal of our project is to create a playable simulation of a computer game by using a diffusion model. For such a model, the input is the previous frame (or a sequence of frames) and the user action. The output is the next frame. Various computer games have already been simulated using this approach.
+
 \section{Data generation}
 
 For generating the training data, a Mario Brothers emulator \footnote{\url{https://github.com/Kautenja/gym-super-mario-bros}} was used, as the Gymnasium framework did not have the NES game we were looking for. For controlling the game while generating the data, 3 strategies were originally used. A fully random strategy, with a uniform distribution of all the provided \texttt{SIMPLE\_MOVEMENT} actions and some action stickieness over several frames. The second strategy relyed on a pre-traing AI\footnote{\url{https://github.com/yumouwei/super-mario-bros-reinforcement-learning}} with the third being a combination, with random length few second periods of one or the other.
@@ -75,5 +78,13 @@ While we discussed PSNR previously, we are currently focusing on less pixel-leve
 We have employed both PSNR and LPIPS in an evaluation script, but currently our models generate images outside the scope of this kind of evaluation, failing to model primary game mechanics.
 
 % I WILL REDO THIS VALIDATION TOMMOROW ON BOTH THE OG DATA 250k AND SECOND GEN GAMENGEN MODEL
+
+\section{Future work}
+
+Currently we are focusing on re-running our training with the update dataset. If this section hasn't been updated with the results then something probably went wrong.
+
+Further I would like to explore training a smaller, purpose-built transformer ground-up to achieve better performance on more reasonable hardware, like a laptop GPU.
+
+I encourage my collegues to add to this section ofcourse.
 
 \end{document}
