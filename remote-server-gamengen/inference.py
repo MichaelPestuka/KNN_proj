@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import random
 from pathlib import Path
+
 import numpy as np
 import torch
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
@@ -27,6 +28,11 @@ np.random.seed(9052924)
 random.seed(9052924)
 
 _START_IMAGE = Path(__file__).resolve().parent / "sample_images" / "start.jpg"
+
+
+def _autocast_dtype(device: torch.device) -> torch.dtype:
+    """Use FP16 autocast on CUDA; keep FP32 elsewhere (MPS/CPU)."""
+    return torch.float16 if device.type == "cuda" else torch.float32
 
 
 def encode_conditioning_frames(
@@ -85,6 +91,10 @@ def next_latent(
     do_classifier_free_guidance: bool = True,
     guidance_scale: float = CFG_GUIDANCE_SCALE,
     skip_action_conditioning: bool = False,
+    *,
+    precomputed_timesteps: torch.Tensor | None = None,
+    class_labels: torch.Tensor | None = None,
+    verify_context: bool = False,
 ):
     batch_size = context_latents.shape[0]
     latent_height = context_latents.shape[-2]
@@ -92,8 +102,11 @@ def next_latent(
     num_channels_latents = context_latents.shape[2]
 
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
-    device_type = device.type if isinstance(device, torch.device) else str(device).split(":")[0]
-    with torch.no_grad(), autocast(device_type=device_type, dtype=torch.float32):
+    device_type = (
+        device.type if isinstance(device, torch.device) else str(device).split(":")[0]
+    )
+    amp_dtype = _autocast_dtype(device)
+    with torch.no_grad(), autocast(device_type=device_type, dtype=amp_dtype):
         # Generate initial noise for the target frame
         latents = get_initial_noisy_latent(
             noise_scheduler,
@@ -106,9 +119,12 @@ def next_latent(
             dtype=unet.dtype,
         )
 
-        # Prepare timesteps
-        noise_scheduler.set_timesteps(num_inference_steps, device=device)
-        timesteps = noise_scheduler.timesteps
+        # Prepare timesteps (caller may cache identical schedule across frames)
+        if precomputed_timesteps is not None:
+            timesteps = precomputed_timesteps
+        else:
+            noise_scheduler.set_timesteps(num_inference_steps, device=device)
+            timesteps = noise_scheduler.timesteps
 
         if not skip_action_conditioning:
             if do_classifier_free_guidance:
@@ -139,13 +155,19 @@ def next_latent(
                 latent_model_input, t
             )
 
+            cl_batch = latent_model_input.shape[0]
+            if class_labels is not None and class_labels.shape[0] == cl_batch:
+                cl = class_labels
+            else:
+                cl = torch.zeros(cl_batch, dtype=torch.long, device=device)
+
             # Predict noise
             noise_pred = unet(
                 latent_model_input,
                 t,
                 encoder_hidden_states=encoder_hidden_states,
                 timestep_cond=None,
-                class_labels=torch.zeros(batch_size, dtype=torch.long).to(device),
+                class_labels=cl,
                 return_dict=False,
             )[0]
 
@@ -174,7 +196,8 @@ def next_latent(
             )
 
             # The conditioning frames should not be modified by the denoising process
-            assert torch.all(context_latents == reshaped_frames[:, :BUFFER_SIZE])
+            if verify_context:
+                assert torch.all(context_latents == reshaped_frames[:, :BUFFER_SIZE])
 
         # Return the final latents of the target frame only
         reshaped_frames = latents.reshape(
@@ -211,19 +234,25 @@ def run_inference_img_conditioning_with_params(
     do_classifier_free_guidance=True,
     guidance_scale=CFG_GUIDANCE_SCALE,
     skip_action_conditioning=False,
+    image_processor: VaeImageProcessor | None = None,
 ) -> Image:
     assert batch["pixel_values"].shape[0] == 1, "Batch size must be 1"
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
-    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
-    device_type = device.type if isinstance(device, torch.device) else str(device).split(":")[0]
-    with torch.no_grad(), autocast(device_type=device_type, dtype=torch.float32):
+    if image_processor is None:
+        image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+    device_type = (
+        device.type if isinstance(device, torch.device) else str(device).split(":")[0]
+    )
+    amp_dtype = _autocast_dtype(device)
+    encode_dtype = vae.dtype
+    with torch.no_grad(), autocast(device_type=device_type, dtype=amp_dtype):
         actions = batch["input_ids"]
 
         conditioning_frames_latents = encode_conditioning_frames(
             vae,
             images=batch["pixel_values"],
             vae_scale_factor=vae_scale_factor,
-            dtype=torch.float32,
+            dtype=encode_dtype,
         )
         new_frame = next_latent(
             unet=unet,
@@ -249,7 +278,9 @@ def run_inference_img_conditioning_with_params(
 def _default_image_transform() -> transforms.Compose:
     return transforms.Compose(
         [
-            transforms.Resize((HEIGHT, WIDTH), interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.Resize(
+                (HEIGHT, WIDTH), interpolation=transforms.InterpolationMode.BILINEAR
+            ),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
         ]
@@ -292,6 +323,32 @@ def build_batch_from_buffers(
     return {"pixel_values": frames, "input_ids": actions}
 
 
+def _encode_initial_latent_buffer(
+    vae: AutoencoderKL,
+    img_transform: transforms.Compose,
+    start_image: Image.Image,
+    device: torch.device,
+    vae_scale_factor: int,
+) -> torch.Tensor:
+    """Encode BUFFER_SIZE copies of the start frame to latent space [BUFFER_SIZE, C, H, W]."""
+    frame = img_transform(start_image.convert("RGB"))
+    # [1, BUFFER_SIZE, 3, H, W] — same as training batch with repeated start
+    pixel_batch = frame.unsqueeze(0).expand(BUFFER_SIZE, -1, -1, -1).unsqueeze(0)
+    encode_dtype = vae.dtype
+    device_type = (
+        device.type if isinstance(device, torch.device) else str(device).split(":")[0]
+    )
+    amp_dtype = _autocast_dtype(device)
+    with torch.no_grad(), autocast(device_type=device_type, dtype=amp_dtype):
+        conditioning = encode_conditioning_frames(
+            vae,
+            images=pixel_batch.to(device=device, dtype=encode_dtype),
+            vae_scale_factor=vae_scale_factor,
+            dtype=encode_dtype,
+        )
+    return conditioning.squeeze(0)
+
+
 class InferenceEngine:
     """Rolling-window GameNGen inference: 9 past frames/actions + current action -> next frame."""
 
@@ -323,42 +380,90 @@ class InferenceEngine:
         self._guidance_scale = guidance_scale
         self._skip_action_conditioning = skip_action_conditioning
 
+        self._vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+        self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
+        self._img_transform = _default_image_transform()
+
+        # Scheduler timesteps are identical every frame — compute once
+        self._noise_scheduler.set_timesteps(num_inference_steps, device=device)
+        self._timesteps = self._noise_scheduler.timesteps
+
+        # class_labels batch size matches UNet input (1 without CFG, 2 with CFG)
+        cl_n = 2 if do_classifier_free_guidance else 1
+        self._class_labels = torch.zeros(cl_n, dtype=torch.long, device=device)
+
         path = start_image_path or _START_IMAGE
         start = Image.open(path).convert("RGB")
-        self._frame_buffer: list[Image.Image] = [start.copy() for _ in range(BUFFER_SIZE)]
+        self._latent_buffer = _encode_initial_latent_buffer(
+            vae,
+            self._img_transform,
+            start,
+            device,
+            self._vae_scale_factor,
+        )
         self._action_buffer: list[int] = [0] * BUFFER_SIZE
 
     def reset(self, start_image_path: Path | None = None) -> None:
         path = start_image_path or _START_IMAGE
         start = Image.open(path).convert("RGB")
-        self._frame_buffer = [start.copy() for _ in range(BUFFER_SIZE)]
+        self._latent_buffer = _encode_initial_latent_buffer(
+            self._vae,
+            self._img_transform,
+            start,
+            self._device,
+            self._vae_scale_factor,
+        )
         self._action_buffer = [0] * BUFFER_SIZE
 
     def step(self, action_index: int) -> Image.Image:
         if action_index < 0 or action_index >= NUM_ACTIONS:
-            raise ValueError(f"action_index must be in [0, {NUM_ACTIONS}), got {action_index}")
+            raise ValueError(
+                f"action_index must be in [0, {NUM_ACTIONS}), got {action_index}"
+            )
 
-        batch = build_batch_from_buffers(
-            self._frame_buffer, self._action_buffer, action_index
-        )
-        img = run_inference_img_conditioning_with_params(
-            self._unet,
-            self._vae,
-            self._noise_scheduler,
-            self._action_embedding,
-            self._tokenizer,
-            self._text_encoder,
-            batch,
-            device=self._device,
-            skip_action_conditioning=self._skip_action_conditioning,
-            do_classifier_free_guidance=self._do_cfg,
-            guidance_scale=self._guidance_scale,
-            num_inference_steps=self._num_inference_steps,
+        actions = (
+            torch.tensor(
+                self._action_buffer + [action_index], dtype=torch.long, device=self._device
+            )
+            .unsqueeze(0)
         )
 
-        self._frame_buffer = self._frame_buffer[1:] + [img]
-        self._action_buffer = self._action_buffer[1:] + [action_index]
-        return img
+        device_type = (
+            self._device.type
+            if isinstance(self._device, torch.device)
+            else str(self._device).split(":")[0]
+        )
+        amp_dtype = _autocast_dtype(self._device)
+
+        with torch.no_grad(), autocast(device_type=device_type, dtype=amp_dtype):
+            new_latent = next_latent(
+                unet=self._unet,
+                vae=self._vae,
+                noise_scheduler=self._noise_scheduler,
+                action_embedding=self._action_embedding,
+                context_latents=self._latent_buffer.unsqueeze(0),
+                device=self._device,
+                actions=actions,
+                skip_action_conditioning=self._skip_action_conditioning,
+                num_inference_steps=self._num_inference_steps,
+                do_classifier_free_guidance=self._do_cfg,
+                guidance_scale=self._guidance_scale,
+                precomputed_timesteps=self._timesteps,
+                class_labels=self._class_labels,
+            )
+
+            # Sliding window in latent space (no VAE re-encode of context)
+            self._latent_buffer = torch.cat(
+                [self._latent_buffer[1:], new_latent], dim=0
+            )
+            self._action_buffer = self._action_buffer[1:] + [action_index]
+
+            pil = decode_and_postprocess(
+                vae=self._vae,
+                image_processor=self._image_processor,
+                latents=new_latent,
+            )
+        return pil
 
 
 def main(model_folder: str) -> None:
@@ -373,6 +478,9 @@ def main(model_folder: str) -> None:
     unet, vae, action_embedding, noise_scheduler, tokenizer, text_encoder = load_model(
         model_folder, device
     )
+
+    vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
 
     batch = build_batch_from_start_image()
 
@@ -389,6 +497,7 @@ def main(model_folder: str) -> None:
         do_classifier_free_guidance=False,
         guidance_scale=CFG_GUIDANCE_SCALE,
         num_inference_steps=DEFAULT_NUM_INFERENCE_STEPS,
+        image_processor=image_processor,
     )
     img.save("validation_image.png")
 

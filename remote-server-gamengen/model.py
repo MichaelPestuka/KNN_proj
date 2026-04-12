@@ -92,5 +92,10 @@ def load_model(
         vae = vae.to(device)
         action_embedding = action_embedding.to(device)
         text_encoder = text_encoder.to(device)
+        # FP16 UNet/VAE/embedding on CUDA for faster inference (Blackwell and similar).
+        if device.type == "cuda":
+            unet = unet.to(dtype=torch.float16)
+            vae = vae.to(dtype=torch.float16)
+            action_embedding = action_embedding.to(dtype=torch.float16)
 
     return unet, vae, action_embedding, noise_scheduler, tokenizer, text_encoder
