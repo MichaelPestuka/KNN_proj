@@ -2,6 +2,13 @@
 """
 Remote GameNGen loop: read 1-byte action indices from stdin, write length-prefixed JPEG frames to stdout.
 
+Protocol (decoupled):
+  - Client sends action bytes continuously (e.g. at 60 Hz).
+  - Server reads them in a background thread, keeping only the latest.
+  - Server runs inference as fast as possible, using the most recent action,
+    and writes length-prefixed JPEG frames to stdout without waiting for the
+    client to acknowledge each frame.
+
 Designed to be launched by the local client over SSH, e.g.:
   ssh -T user@host 'cd /home/knn/KNN_proj/remote-server-gamengen && pipenv run python inference_loop.py --model_folder ~/weights'
 """
@@ -9,10 +16,10 @@ Designed to be launched by the local client over SSH, e.g.:
 from __future__ import annotations
 
 import argparse
-import io
 import logging
 import struct
 import sys
+import threading
 
 import torch
 
@@ -78,20 +85,42 @@ def main() -> None:
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
 
+    # --- Shared state: latest action byte, updated by reader thread ----------
+    latest_action = 0
+    action_lock = threading.Lock()
+    eof_event = threading.Event()
+
+    def action_reader() -> None:
+        nonlocal latest_action
+        try:
+            while True:
+                b = stdin.read(1)
+                if not b:
+                    eof_event.set()
+                    return
+                val = b[0]
+                if val >= NUM_ACTIONS:
+                    val = 0
+                with action_lock:
+                    latest_action = val
+        except Exception:
+            eof_event.set()
+
+    threading.Thread(target=action_reader, daemon=True).start()
+
+    # Wait for the first action to arrive before starting the loop so the GPU
+    # doesn't spin on the default (NOOP) while the client is still connecting.
+    eof_event.wait(timeout=600)
+    if eof_event.is_set() and latest_action == 0:
+        logger.info("EOF before any action; exiting")
+        return
+
     try:
-        while True:
-            chunk = stdin.read(1)
-            if not chunk:
-                logger.info("EOF on stdin; exiting")
-                break
-            action_index = chunk[0]
-            if action_index >= NUM_ACTIONS:
-                logger.warning("Invalid action byte %s; using NOOP", action_index)
-                action_index = 0
-            pil_image = engine.step(action_index)
-            buf = io.BytesIO()
-            pil_image.save(buf, format="JPEG", quality=args.jpeg_quality)
-            jpeg_bytes = buf.getvalue()
+        while not eof_event.is_set():
+            with action_lock:
+                action = latest_action
+
+            jpeg_bytes = engine.step_jpeg(action, quality=args.jpeg_quality)
             header = struct.pack(">I", len(jpeg_bytes))
             stdout.write(header + jpeg_bytes)
             stdout.flush()

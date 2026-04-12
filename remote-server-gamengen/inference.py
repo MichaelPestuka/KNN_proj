@@ -12,6 +12,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from PIL import Image
 from torch.amp import autocast
 from torchvision import transforms
+from torchvision.io import encode_jpeg
 
 from config import (
     BUFFER_SIZE,
@@ -380,6 +381,10 @@ class InferenceEngine:
         self._guidance_scale = guidance_scale
         self._skip_action_conditioning = skip_action_conditioning
 
+        self._device_type = (
+            device.type if isinstance(device, torch.device) else str(device).split(":")[0]
+        )
+        self._amp_dtype = _autocast_dtype(device)
         self._vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
         self._img_transform = _default_image_transform()
@@ -415,27 +420,18 @@ class InferenceEngine:
         )
         self._action_buffer = [0] * BUFFER_SIZE
 
-    def step(self, action_index: int) -> Image.Image:
+    def _step_latent(self, action_index: int) -> torch.Tensor:
+        """Run UNet denoising and update buffers.  Returns the new frame latent."""
         if action_index < 0 or action_index >= NUM_ACTIONS:
             raise ValueError(
                 f"action_index must be in [0, {NUM_ACTIONS}), got {action_index}"
             )
 
-        actions = (
-            torch.tensor(
-                self._action_buffer + [action_index], dtype=torch.long, device=self._device
-            )
-            .unsqueeze(0)
-        )
+        actions = torch.tensor(
+            self._action_buffer + [action_index], dtype=torch.long, device=self._device
+        ).unsqueeze(0)
 
-        device_type = (
-            self._device.type
-            if isinstance(self._device, torch.device)
-            else str(self._device).split(":")[0]
-        )
-        amp_dtype = _autocast_dtype(self._device)
-
-        with torch.no_grad(), autocast(device_type=device_type, dtype=amp_dtype):
+        with torch.no_grad(), autocast(device_type=self._device_type, dtype=self._amp_dtype):
             new_latent = next_latent(
                 unet=self._unet,
                 vae=self._vae,
@@ -452,18 +448,33 @@ class InferenceEngine:
                 class_labels=self._class_labels,
             )
 
-            # Sliding window in latent space (no VAE re-encode of context)
-            self._latent_buffer = torch.cat(
-                [self._latent_buffer[1:], new_latent], dim=0
-            )
-            self._action_buffer = self._action_buffer[1:] + [action_index]
+        self._latent_buffer = torch.cat(
+            [self._latent_buffer[1:], new_latent], dim=0
+        )
+        self._action_buffer = self._action_buffer[1:] + [action_index]
+        return new_latent
 
-            pil = decode_and_postprocess(
+    def step(self, action_index: int) -> Image.Image:
+        """Run one step and return the generated frame as a PIL Image."""
+        new_latent = self._step_latent(action_index)
+        with torch.no_grad(), autocast(device_type=self._device_type, dtype=self._amp_dtype):
+            return decode_and_postprocess(
                 vae=self._vae,
                 image_processor=self._image_processor,
                 latents=new_latent,
             )
-        return pil
+
+    def step_jpeg(self, action_index: int, quality: int = 85) -> bytes:
+        """Run one step and return the frame as JPEG bytes (no PIL round-trip)."""
+        new_latent = self._step_latent(action_index)
+        with torch.no_grad(), autocast(device_type=self._device_type, dtype=self._amp_dtype):
+            image = self._vae.decode(
+                new_latent / self._vae.config.scaling_factor, return_dict=False
+            )[0]
+            # [-1, 1] → [0, 255] uint8, on GPU then transfer to CPU
+            image = (image[0] / 2 + 0.5).clamp(0, 1)
+            image = (image * 255).to(torch.uint8).cpu()
+            return encode_jpeg(image, quality=quality).numpy().tobytes()
 
 
 def main(model_folder: str) -> None:

@@ -35,8 +35,8 @@ SCALE = 3
 READY_SUBSTRING = "READY"
 
 # Default remote layout (expanded on the remote shell)
-DEFAULT_REMOTE_DIR = "/home/knn/KNN_proj/remote-server-gamengen"
-DEFAULT_MODEL_FOLDER = "/home/knn/gamengenmario/good-prototype"
+DEFAULT_REMOTE_DIR = "/home/vpsuser/KNN_proj/remote-server-gamengen"
+DEFAULT_MODEL_FOLDER = "/home/vpsuser/KNN/gameNgen-repro/sd-full-dataset-180k-steps"
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,7 +125,8 @@ class GameClientApp:
         )
         self._ready = threading.Event()
         self._stop = threading.Event()
-        self._worker: threading.Thread | None = None
+        self._action_thread: threading.Thread | None = None
+        self._reader_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
 
         self.root = tk.Tk()
@@ -203,9 +204,9 @@ class GameClientApp:
         except Exception as e:  # pragma: no cover
             self._frame_queue.put(e)
 
-    def _io_worker(self, proc: subprocess.Popen) -> None:
+    def _action_sender(self, proc: subprocess.Popen) -> None:
+        """Send current action at ~60 Hz, independent of frame receipt."""
         assert proc.stdin is not None
-        assert proc.stdout is not None
         try:
             if not self._ready.wait(timeout=600):
                 self._frame_queue.put(TimeoutError("Remote did not become READY in time"))
@@ -216,7 +217,21 @@ class GameClientApp:
                     action_byte = self._current_action & 0xFF
                 proc.stdin.write(bytes([action_byte]))
                 proc.stdin.flush()
+                time.sleep(1 / 60)
+        except (BrokenPipeError, OSError):
+            pass
+        except Exception as e:
+            if not self._stop.is_set():
+                self._frame_queue.put(e)
 
+    def _frame_reader(self, proc: subprocess.Popen) -> None:
+        """Read frames continuously, as fast as the server produces them."""
+        assert proc.stdout is not None
+        try:
+            if not self._ready.wait(timeout=600):
+                return
+
+            while not self._stop.is_set():
                 raw_len = read_exact(proc.stdout, 4)
                 (length,) = struct.unpack(">I", raw_len)
                 if length > 50 * 1024 * 1024:
@@ -249,8 +264,14 @@ class GameClientApp:
             target=self._stderr_reader, args=(self._proc,), daemon=True
         )
         self._stderr_thread.start()
-        self._worker = threading.Thread(target=self._io_worker, args=(self._proc,), daemon=True)
-        self._worker.start()
+        self._action_thread = threading.Thread(
+            target=self._action_sender, args=(self._proc,), daemon=True
+        )
+        self._action_thread.start()
+        self._reader_thread = threading.Thread(
+            target=self._frame_reader, args=(self._proc,), daemon=True
+        )
+        self._reader_thread.start()
         self.status_var.set("Connected — streaming")
         self._poll_frames()
 
