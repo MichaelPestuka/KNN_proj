@@ -4,6 +4,15 @@ Collect Super Mario Bros gameplay frames and actions using gym-super-mario-bros.
 
 Each run is stored under collected_data/<agent>_w<world>s<stage>_<8hex>/ with
 JPG frames and run.json (suffix matches run_id in run.json and frame filenames).
+
+Agents:
+  random — random policy on the pixel env.
+  ppo — SB3 PPO on the RAM/stacked env; every frame is saved.
+  combined — alternates PPO and random in short stretches; every frame is saved.
+  delayed_random — PPO plays from spawn for a random number of env steps (uniform 1…1115; ~1119 steps is a full
+    level clear) to place Mario at a random point on that trajectory, then logs frames and rewards only for the
+    random/NOOP oscillation phase. run.json contains no rows or totals from the PPO segment (replay still follows
+    from seed + checkpoint).
 """
 
 from __future__ import annotations
@@ -24,21 +33,24 @@ import numpy as np
 from PIL import Image
 
 import gym_super_mario_bros  # noqa: F401 — registers envs
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
+from gym_super_mario_bros.actions import COMPLEX_MOVEMENT
 from nes_py.wrappers import JoypadSpace
 
 from smb_ram_wrapper import make_ram_env
 
 
-AGENTS = ("random", "ppo", "combined")
+AGENTS = ("random", "ppo", "combined", "delayed_random")
 DEFAULT_WORLDS = (1,)
 DEFAULT_STAGES = (1,)
-DEFAULT_MAX_STEPS = 10_000
-DEFAULT_RUNS_PER_AGENT = {"random": 10, "ppo": 1, "combined": 100}
+DEFAULT_MAX_STEPS = 2500
+DEFAULT_RUNS_PER_AGENT = {"random": 0, "ppo": 1, "combined": 100, "delayed_random": 500}
 GAME_OVER_EXTRA_STEPS = 45
 COMBINED_PERIOD_MIN_FRAMES = 5
 COMBINED_PERIOD_MAX_FRAMES = 40
 COMBINED_PPO_PERIOD_PROB = 2.0 / 3.0  # 2:1 PPO vs random stretches
+DELAYED_RANDOM_PPO_MIN_FRAMES = 1
+DELAYED_RANDOM_PPO_MAX_FRAMES = 1115
+DELAYED_RANDOM_OSCILLATION_FRAMES = 100
 
 
 def _json_safe_info(info: dict[str, Any]) -> dict[str, Any]:
@@ -58,7 +70,7 @@ def _json_safe_info(info: dict[str, Any]) -> dict[str, Any]:
 def make_env(world: int, stage: int) -> Any:
     env_id = f"SuperMarioBros-{world}-{stage}-v0"
     env = gym_super_mario_bros.make(env_id)
-    return JoypadSpace(env, SIMPLE_MOVEMENT)
+    return JoypadSpace(env, COMPLEX_MOVEMENT)
 
 
 def get_base_env(env: Any) -> Any:
@@ -113,7 +125,7 @@ def get_agent_fn(name: str, rng: np.random.Generator) -> Callable[[int], int]:
 def action_to_list(action_index: int | None) -> list[str] | None:
     if action_index is None:
         return None
-    return list(SIMPLE_MOVEMENT[action_index])
+    return list(COMPLEX_MOVEMENT[action_index])
 
 
 @dataclass(frozen=True)
@@ -160,7 +172,8 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
 
     use_ppo = task.agent == "ppo"
     use_combined = task.agent == "combined"
-    if use_ppo or use_combined:
+    use_delayed_random = task.agent == "delayed_random"
+    if use_ppo or use_combined or use_delayed_random:
         if not task.model_path:
             raise ValueError(f"{task.agent} agent requires model_path on RunTask")
         from stable_baselines3 import PPO
@@ -174,6 +187,8 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         )
         agent_fn = None
         combined_action: Callable[[Any, int], int] | None = None
+        delayed_random_action: Callable[[Any, int], int] | None = None
+        delayed_random_ppo_frames = 0
         if use_combined:
             random_act = make_random_agent(rng)
             period_left = 0
@@ -191,13 +206,30 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
                     return int(model.predict(obs, deterministic=True)[0])
                 return random_act(n_actions)
 
+        elif use_delayed_random:
+            delayed_random_ppo_frames = int(
+                rng.integers(DELAYED_RANDOM_PPO_MIN_FRAMES, DELAYED_RANDOM_PPO_MAX_FRAMES + 1)
+            )
+            random_act_dr = make_random_agent(rng)
+            osc_step = 0
+
+            def delayed_random_action(obs: Any, n_actions: int) -> int:
+                nonlocal osc_step
+                period = osc_step // DELAYED_RANDOM_OSCILLATION_FRAMES
+                osc_step += 1
+                if period % 2 == 0:
+                    return random_act_dr(n_actions)
+                return 0
+
     else:
         model = None
         combined_action = None
+        delayed_random_action = None
+        delayed_random_ppo_frames = 0
         env = make_env(task.world, task.stage)
         agent_fn = get_agent_fn(task.agent, rng)
 
-    n_actions = len(SIMPLE_MOVEMENT)
+    n_actions = env.action_space.n
 
     run_uuid = uuid.uuid4().hex[:8]
     folder_name = _run_folder_name(task.agent, task.world, task.stage, run_uuid)
@@ -219,6 +251,24 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
     frames_rows: list[dict[str, Any]] = []
     total_reward = 0.0
     frame_idx = 0
+
+    # PPO warm-up for delayed_random: advance env without saving frames or logging rows.
+    pending_terminal_info: dict[str, Any] | None = None
+    if use_delayed_random:
+        for _ in range(delayed_random_ppo_frames):
+            action_index = int(model.predict(obs, deterministic=True)[0])
+            step_out = env.step(action_index)
+            if len(step_out) == 5:
+                next_obs, reward, terminated, truncated, info = step_out
+                done = bool(terminated or truncated)
+            else:
+                next_obs, reward, done, info = step_out
+            if isinstance(next_obs, tuple):
+                next_obs = next_obs[0]
+            if done:
+                pending_terminal_info = dict(info)
+                break
+            obs = next_obs
     outcome = "max_steps"
     flag_get = False
 
@@ -226,8 +276,57 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         return f"frame_{run_uuid}_{i:06d}.jpg"
 
     while frame_idx < task.max_steps:
+        if pending_terminal_info is not None:
+            info = pending_terminal_info
+            pending_terminal_info = None
+            flag_get = bool(info.get("flag_get", False))
+            outcome = "flag" if flag_get else "death"
+
+            # Terminal gameplay frame (death / pole) — episode ended during PPO warm-up.
+            term_fname = filename_for(frame_idx)
+            save_frame_jpg(run_dir / term_fname, capture_raw_screen(env))
+            term_info = _json_safe_info(dict(info))
+            frames_rows.append(
+                {
+                    "frame": frame_idx,
+                    "filename": term_fname,
+                    "action_index": None,
+                    "action": None,
+                    "reward": 0.0,
+                    "done": True,
+                    "info": term_info,
+                    "note": "terminal_observation_after_done",
+                }
+            )
+            frame_idx += 1
+
+            if not flag_get:
+                base = get_base_env(env)
+                noop_byte = int(get_joypad_env(env)._action_map[0])
+                for g in range(GAME_OVER_EXTRA_STEPS):
+                    base._frame_advance(noop_byte)
+                    raw = capture_raw_screen(env)
+                    go_fname = filename_for(frame_idx)
+                    save_frame_jpg(run_dir / go_fname, raw)
+                    frames_rows.append(
+                        {
+                            "frame": frame_idx,
+                            "filename": go_fname,
+                            "action_index": 0,
+                            "action": action_to_list(0),
+                            "reward": 0.0,
+                            "done": True,
+                            "info": {"game_over_sequence": True, "sequence_index": g},
+                            "note": "game_over_sequence",
+                        }
+                    )
+                    frame_idx += 1
+            break
+
         rgb_before = capture_raw_screen(env)
-        if combined_action is not None:
+        if delayed_random_action is not None:
+            action_index = delayed_random_action(obs, n_actions)
+        elif combined_action is not None:
             action_index = combined_action(obs, n_actions)
         elif use_ppo:
             action_index = int(model.predict(obs, deterministic=True)[0])
@@ -328,9 +427,8 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         "seed": effective_seed,
         "seed_source": seed_source,
         "seed_note": _seed_note(seed_source),
-        "frames": frames_rows,
     }
-    if use_ppo or use_combined:
+    if use_ppo or use_combined or use_delayed_random:
         run_json["ppo_model_path"] = task.model_path
         run_json["ppo_n_stack"] = task.n_stack
         run_json["ppo_n_skip"] = task.n_skip
@@ -338,6 +436,7 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         run_json["combined_period_min_frames"] = COMBINED_PERIOD_MIN_FRAMES
         run_json["combined_period_max_frames"] = COMBINED_PERIOD_MAX_FRAMES
         run_json["combined_ppo_period_prob"] = COMBINED_PPO_PERIOD_PROB
+    run_json["frames"] = frames_rows
 
     with open(run_dir / "run.json", "w", encoding="utf-8") as f:
         json.dump(run_json, f, indent=2)
@@ -377,7 +476,7 @@ def build_tasks(
                             output_dir=str(output_dir),
                             max_steps=max_steps,
                             seed=replay_seed,
-                            model_path=model_path if agent in ("ppo", "combined") else None,
+                            model_path=model_path if agent in ("ppo", "combined", "delayed_random") else None,
                             n_stack=n_stack,
                             n_skip=n_skip,
                         )
@@ -409,6 +508,13 @@ def parse_args() -> argparse.Namespace:
         help="Runs per (world, stage) for combined agent; 0 skips (default: %(default)s)",
     )
     p.add_argument(
+        "--runs-delayed-random",
+        type=int,
+        default=DEFAULT_RUNS_PER_AGENT["delayed_random"],
+        metavar="N",
+        help="Runs per (world, stage) for delayed_random agent; 0 skips (default: %(default)s)",
+    )
+    p.add_argument(
         "--worlds",
         nargs="+",
         type=int,
@@ -425,7 +531,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "collected_data",
+        default=Path(__file__).resolve().parent / "collected_data2",
         help="Output directory (default: ./collected_data next to this script)",
     )
     p.add_argument(
@@ -450,19 +556,19 @@ def parse_args() -> argparse.Namespace:
         "--model-path",
         type=Path,
         default=None,
-        help="Path to SB3 PPO .zip for ppo / combined (default: ./models/pre-trained-1.zip next to this script)",
+        help="Path to SB3 PPO .zip for ppo / combined / delayed_random (default: ./models/pre-trained-1.zip next to this script)",
     )
     p.add_argument(
         "--n-stack",
         type=int,
         default=4,
-        help="RAM observation frame stack depth for ppo / combined (must match the checkpoint; pre-trained-1 uses 4)",
+        help="RAM observation frame stack depth for ppo / combined / delayed_random (must match the checkpoint; pre-trained-1 uses 4)",
     )
     p.add_argument(
         "--n-skip",
         type=int,
         default=4,
-        help="RAM observation frame skip for ppo / combined (must match the checkpoint; pre-trained-1 uses 4)",
+        help="RAM observation frame skip for ppo / combined / delayed_random (must match the checkpoint; pre-trained-1 uses 4)",
     )
     return p.parse_args()
 
@@ -479,12 +585,13 @@ def main() -> None:
         "random": args.runs_random,
         "ppo": args.runs_ppo,
         "combined": args.runs_combined,
+        "delayed_random": args.runs_delayed_random,
     }
     for k, v in runs_per_agent.items():
         if v < 0:
             raise SystemExit(f"--runs-{k.replace('_', '-')} must be >= 0, got {v}")
 
-    if runs_per_agent["ppo"] > 0 or runs_per_agent["combined"] > 0:
+    if runs_per_agent["ppo"] > 0 or runs_per_agent["combined"] > 0 or runs_per_agent["delayed_random"] > 0:
         model_file = args.model_path if args.model_path is not None else default_ppo_model
         model_file = model_file.resolve()
         if not model_file.is_file():
@@ -493,6 +600,8 @@ def main() -> None:
                 need.append("ppo")
             if runs_per_agent["combined"] > 0:
                 need.append("combined")
+            if runs_per_agent["delayed_random"] > 0:
+                need.append("delayed_random")
             raise SystemExit(
                 f"model file required for {', '.join(need)} runs: not found: {model_file}"
             )

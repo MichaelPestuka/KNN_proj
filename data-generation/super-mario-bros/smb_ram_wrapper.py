@@ -14,7 +14,7 @@ import gym
 import gym_super_mario_bros  # noqa: F401 — registers envs
 import numpy as np
 from gym import spaces
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
+from gym_super_mario_bros.actions import COMPLEX_MOVEMENT
 from nes_py.wrappers import JoypadSpace
 
 from smb_utils import smb_grid
@@ -93,5 +93,5 @@ def make_ram_env(
 ) -> SMBRamWrapper:
     env_id = f"SuperMarioBros-{world}-{stage}-v0"
     env = gym_super_mario_bros.make(env_id)
-    env = JoypadSpace(env, SIMPLE_MOVEMENT)
+    env = JoypadSpace(env, COMPLEX_MOVEMENT)
     return SMBRamWrapper(env, crop_dim, n_stack=n_stack, n_skip=n_skip)

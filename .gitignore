@@ -217,6 +217,7 @@ __marimo__/
 
 # Mario data collection (gym-super-mario-bros)
 data-generation/super-mario-bros/collected_data/
+data-generation/super-mario-bros/collected_data2/
 
 ### TeX ###
 ## Core latex/pdflatex auxiliary files:
@@ -545,3 +546,5 @@ TSWLatexianTemp*
 # option is specified. Footnotes are the stored in a file with suffix Notes.bib.
 # Uncomment the next line to have this generated file ignored.
 #*Notes.bib
+
+*.lock

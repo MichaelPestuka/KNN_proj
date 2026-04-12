@@ -44,7 +44,10 @@ def load_action_embedding(
 
 
 def load_model(
-    model_folder: str, device: torch.device | None = None
+    model_folder: str,
+    device: torch.device | None = None,
+    *,
+    vae_device: torch.device | None = None,
 ) -> tuple[
     UNet2DConditionModel,
     AutoencoderKL,
@@ -58,6 +61,8 @@ def load_model(
 
     Args:
         model_folder: the folder to load the model from, can be a model id or a local folder
+        device: device for UNet, action_embedding, text_encoder
+        vae_device: optional separate device for VAE (defaults to *device*)
     """
     embedding_info = load_embedding_info_dict(model_folder)
     action_embedding = load_action_embedding(
@@ -88,14 +93,15 @@ def load_model(
     )
 
     if device:
+        actual_vae_device = vae_device or device
         unet = unet.to(device)
-        vae = vae.to(device)
+        vae = vae.to(actual_vae_device)
         action_embedding = action_embedding.to(device)
         text_encoder = text_encoder.to(device)
-        # FP16 UNet/VAE/embedding on CUDA for faster inference (Blackwell and similar).
         if device.type == "cuda":
             unet = unet.to(dtype=torch.float16)
-            vae = vae.to(dtype=torch.float16)
             action_embedding = action_embedding.to(dtype=torch.float16)
+        if actual_vae_device.type == "cuda":
+            vae = vae.to(dtype=torch.float16)
 
     return unet, vae, action_embedding, noise_scheduler, tokenizer, text_encoder
