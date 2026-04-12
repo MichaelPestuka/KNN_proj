@@ -33,7 +33,7 @@ import numpy as np
 from PIL import Image
 
 import gym_super_mario_bros  # noqa: F401 — registers envs
-from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
+from gym_super_mario_bros.actions import COMPLEX_MOVEMENT
 from nes_py.wrappers import JoypadSpace
 
 from smb_ram_wrapper import make_ram_env
@@ -42,8 +42,8 @@ from smb_ram_wrapper import make_ram_env
 AGENTS = ("random", "ppo", "combined", "delayed_random")
 DEFAULT_WORLDS = (1,)
 DEFAULT_STAGES = (1,)
-DEFAULT_MAX_STEPS = 10_000
-DEFAULT_RUNS_PER_AGENT = {"random": 0, "ppo": 0, "combined": 100, "delayed_random": 500}
+DEFAULT_MAX_STEPS = 2500
+DEFAULT_RUNS_PER_AGENT = {"random": 0, "ppo": 1, "combined": 100, "delayed_random": 500}
 GAME_OVER_EXTRA_STEPS = 45
 COMBINED_PERIOD_MIN_FRAMES = 5
 COMBINED_PERIOD_MAX_FRAMES = 40
@@ -70,7 +70,7 @@ def _json_safe_info(info: dict[str, Any]) -> dict[str, Any]:
 def make_env(world: int, stage: int) -> Any:
     env_id = f"SuperMarioBros-{world}-{stage}-v0"
     env = gym_super_mario_bros.make(env_id)
-    return JoypadSpace(env, SIMPLE_MOVEMENT)
+    return JoypadSpace(env, COMPLEX_MOVEMENT)
 
 
 def get_base_env(env: Any) -> Any:
@@ -125,7 +125,7 @@ def get_agent_fn(name: str, rng: np.random.Generator) -> Callable[[int], int]:
 def action_to_list(action_index: int | None) -> list[str] | None:
     if action_index is None:
         return None
-    return list(SIMPLE_MOVEMENT[action_index])
+    return list(COMPLEX_MOVEMENT[action_index])
 
 
 @dataclass(frozen=True)
@@ -229,7 +229,7 @@ def run_single_episode(task: RunTask) -> dict[str, Any]:
         env = make_env(task.world, task.stage)
         agent_fn = get_agent_fn(task.agent, rng)
 
-    n_actions = len(SIMPLE_MOVEMENT)
+    n_actions = env.action_space.n
 
     run_uuid = uuid.uuid4().hex[:8]
     folder_name = _run_folder_name(task.agent, task.world, task.stage, run_uuid)
