@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
 """Print basic action statistics for the collected Super Mario Bros dataset."""
 
+import argparse
 import json
 import os
 import sys
 
-DATA_DIR = os.path.join(
-    os.path.dirname(__file__),
-    "..",
-    "super-mario-bros",
-    "collected_data",
-)
+BASE_DIR = os.path.join(os.path.dirname(__file__), "..", "super-mario-bros")
+
+DEFAULT_DATA_DIR = "collected_data"
+
+
+def is_noop(action):
+    return action is None or action == ["NOOP"]
 
 
 def main():
-    data_dir = os.path.abspath(DATA_DIR)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "data_dir",
+        nargs="?",
+        default=DEFAULT_DATA_DIR,
+        help=f"Name of the data subdirectory under super-mario-bros/ (default: {DEFAULT_DATA_DIR})",
+    )
+    args = parser.parse_args()
+
+    data_dir = os.path.abspath(os.path.join(BASE_DIR, args.data_dir))
     if not os.path.isdir(data_dir):
         print(f"Error: data directory not found: {data_dir}", file=sys.stderr)
         sys.exit(1)
@@ -35,7 +46,7 @@ def main():
         for frame in run["frames"]:
             total_frames += 1
             action = frame["action"]
-            if action is None:
+            if is_noop(action):
                 noop_frames += 1
             elif "left" in action:
                 left_frames += 1
