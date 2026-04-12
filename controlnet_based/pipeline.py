@@ -49,16 +49,38 @@ from transformer import GameStateTransformer, load_transformer_checkpoints, Segm
 # pip install peft
 # pip install bitsandbytes
 
+ADE20K_PALETTE = {
+    "sky":        (70,  130, 180),
+    "ground":     (128, 64,  0  ),
+    "mario":      (220, 20,  60 ),
+    "block":      (128, 0,   0  ),
+    "enemy":      (0,   128, 192),
+    "cloud":      (135, 206, 235),
+    "pipe":       (0,   128, 0  ),
+    "background": (0,   0,   0  ),
+}
+
 SEG_PALETTE = torch.tensor([
-    [0.10, 0.10, 0.10],  # 0: background
-    [0.20, 0.80, 0.20],  # 1: ground
-    [0.90, 0.20, 0.20],  # 2: mario
-    [0.20, 0.20, 0.90],  # 3: pipe
-    [0.90, 0.80, 0.10],  # 4: enemy
-    [0.80, 0.20, 0.80],  # 5: cloud
-    [0.50, 0.50, 0.50],  # 6
-    [0.30, 0.65, 0.35],  # 7
-], dtype=torch.bfloat16)  # [8, 3]
+    [0/255,   0/255,   0/255  ],  # 0: background
+    [128/255, 64/255,  0/255  ],  # 1: ground
+    [220/255, 20/255,  60/255 ],  # 2: mario
+    [128/255, 0/255,   0/255  ],  # 3: block
+    [0/255,   128/255, 192/255],  # 4: enemy
+    [135/255, 206/255, 235/255],  # 5: cloud
+    [0/255,   128/255, 0/255  ],  # 6: pipe
+    [70/255,  130/255, 180/255],  # 7: sky
+], dtype=torch.float32)
+
+# SEG_PALETTE = torch.tensor([
+#     [0.10, 0.10, 0.10],  # 0: background
+#     [0.20, 0.80, 0.20],  # 1: ground
+#     [0.90, 0.20, 0.20],  # 2: mario
+#     [0.20, 0.20, 0.90],  # 3: pipe
+#     [0.90, 0.80, 0.10],  # 4: enemy
+#     [0.80, 0.20, 0.80],  # 5: cloud
+#     [0.50, 0.50, 0.50],  # 6
+#     [0.30, 0.65, 0.35],  # 7
+# ], dtype=torch.bfloat16)  # [8, 3]
 
 def seg_logits_to_rgb(pred_seg: torch.Tensor) -> torch.Tensor:
     """
@@ -66,10 +88,21 @@ def seg_logits_to_rgb(pred_seg: torch.Tensor) -> torch.Tensor:
     returns:  [B, 3, H, W] float32 v [0,1] pro ControlNet
     """
     probs   = torch.sigmoid(pred_seg)               # [B, 6, H, W]
-    palette = SEG_PALETTE.to(pred_seg.device)       # [6, 3]
+    palette = SEG_PALETTE.to(pred_seg.device, dtype=pred_seg.dtype)      # [6, 3]
     # einsum: pro každý pixel vážený součet barev přes třídy
     rgb = torch.einsum("bchw,cd->bdhw", probs, palette)
     return rgb.clamp(0.0, 1.0)
+
+# def seg_logits_to_rgb(pred_seg: torch.Tensor) -> torch.Tensor:
+#     """
+#     pred_seg: [B, C, H, W] logity
+#     returns:  [B, 3, H, W] float32 — ostrá mapa, jeden pixel = jedna třída
+#     """
+#     palette = SEG_PALETTE.to(pred_seg.device, dtype=pred_seg.dtype)  # [C, 3]
+#     class_idx = pred_seg.argmax(dim=1)                               # [B, H, W]
+#     # Indexování palety přes gather
+#     rgb = palette[class_idx]                                          # [B, H, W, 3]
+#     return rgb.permute(0, 3, 1, 2).contiguous()
 
 class DiffusionPipeline:
     def __init__(
@@ -139,8 +172,9 @@ class DiffusionPipeline:
         self,
         states: torch.Tensor,    # [1, seq_len, total_state_dim]
         actions: torch.Tensor,   # [1, seq_len, action_dim]
-        control_scale=1.0,
+        control_scale=1.5,
         num_inference_steps=4,
+        generator=None,
     ):
         assert states.shape[0] == 1, "Prozatím podpora jen pro batch_size=1"
 
@@ -174,12 +208,12 @@ class DiffusionPipeline:
                 image=control_512,
                 height=512,
                 width=512,
-                guidance_scale=1.5,
+                guidance_scale=30.5,
                 controlnet_conditioning_scale=control_scale,
                 num_inference_steps=num_inference_steps,
                 output_type="pt",
                 return_dict=False,
-                generator=torch.manual_seed(0),
+                generator=generator,
             )
         # end = time.time()
         # print(f"⏱️ Inference latency {(end - start) * 1000:.2f} milliseconds")
@@ -614,7 +648,7 @@ def generate_video(
     num_frames=200,
     image_size=256,
     fps=30,
-    num_inference_steps=4
+    num_inference_steps=20
 ):
     json_file = [f for f in os.listdir(episode_path) if f.endswith(".json")][0]
     with open(os.path.join(episode_path, json_file), 'r') as f:
@@ -656,7 +690,7 @@ def generate_video(
     x = 40 / WORLD_W
     y = 79 / VIEWPORT_H
     vx, vy = 0.0, 0.0
-    cx, cy = 0.36, 0.849  # GT segmentaci tu nemáme, začínáme bezpečně na středu kamery    
+    cx, cy = 0.36, 0.849
     
     physics_first = torch.tensor([[[x, y, vx, vy, cx, cy]]], device=device, dtype=dtype)
     latent_first = pipeline.transformer.init_latent.clone().to(device=device, dtype=dtype)
@@ -693,6 +727,8 @@ def generate_video(
     pipeline.controlnet.eval()
     pipeline.pipe.unet.eval()
 
+    generator = torch.Generator(device=pipeline.device).manual_seed(42)
+
     try:
         with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             for t in tqdm(range(max_steps), desc="Generating", unit=" frame"):
@@ -712,7 +748,8 @@ def generate_video(
                 next_frame_np, next_state = pipeline(
                     states, 
                     action_stack, 
-                    num_inference_steps=num_inference_steps
+                    num_inference_steps=num_inference_steps,
+                    generator=generator,
                 )
                 
                 images_for_video.append(next_frame_np)
@@ -737,8 +774,8 @@ def generate_video(
     print(f"💾 Video saved to {output_path}...")
     imageio.mimsave(output_path, images_for_video, fps=fps)
         
-def load_controlnet_checkpoint(pipeline, output_dir="./checkpoints", epoch=0, device="cuda", unet=False):
-        epoch_dir = os.path.join(output_dir, f"epoch_{epoch}")
+def load_controlnet_checkpoint(pipeline, dir="./checkpoints", epoch=0, device="cuda", unet=False):
+        epoch_dir = os.path.join(dir, f"epoch_{epoch}")
         target_dtype = pipeline.pipe.unet.dtype
 
         controlnet_path = os.path.join(epoch_dir, "controlnet")
@@ -755,7 +792,6 @@ def load_controlnet_checkpoint(pipeline, output_dir="./checkpoints", epoch=0, de
             
         print(f"✅ Loading controlnet epoch {epoch} checkpoint completed.")
         return True
-    
     
 if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
@@ -774,15 +810,15 @@ if __name__ == "__main__":
     data_loader_rollout = get_rollout_dataloader(
         root_dir="../data-generation/super-mario-bros/collected_data",
         seg_dir="mario_data_seg",
-        batch_size=64,
+        batch_size=16,
         shuffle=True,
         num_workers=4,
         image_size=256,
         num_actions=seq_len,
         num_frames=seq_len,
-        rollout_steps=20,
-        stride=20,
-        max_episodes=200
+        rollout_steps=10,
+        stride=10,
+        max_episodes=400
     )
     
     transformer = GameStateTransformer()
@@ -792,36 +828,34 @@ if __name__ == "__main__":
     # --- Init pipeline ---
     pipeline = DiffusionPipeline(transformer, decoder, compressor, device=accelerator.device, torch_dtype=torch.bfloat16, compile=False)
 
-    # load_controlnet_checkpoint(pipeline, output_dir="./checkpoints_controlnet", epoch=9, device=accelerator.device, unet=False)
+    load_controlnet_checkpoint(pipeline, dir="./checkpoints_controlnet", epoch=3, device=accelerator.device, unet=False)
     
     load_transformer_checkpoints(
-        "checkpoints_transformer/checkpoint_rollout.pt",
+        "checkpoints_transformer/checkpoint_rollout_best.pt",
         pipeline.transformer,
         pipeline.decoder,
         pipeline.compressor,
         accelerator=None,
         device="cpu"
     )
+    
+    # generate_video(
+    #     pipeline,
+    #     episode_path="../data-generation/super-mario-bros/collected_data/combined_w1s1_00896dbf",
+    #     output_path=f"./episode_video.mp4",
+    #     num_frames=700,
+    #     image_size=256,
+    #     fps=20,
+    #     num_inference_steps=15
+    # )
 
-    trainer = Trainer(pipeline, dataloader=None, rollout_dataloader=data_loader_rollout, accelerator=accelerator, lr=1e-5)
+    trainer = Trainer(pipeline, dataloader=None, rollout_dataloader=data_loader_rollout, accelerator=accelerator, lr=1e-4)
         
-    trainer.train(epochs=14, save_dir="./checkpoints", phase="gt_pretrain", save_every=13, video_every=4)
+    trainer.train(epochs=6, save_dir="./checkpoints", phase="gt_pretrain", save_every=5, video_every=2)
     
-    trainer.train(epochs=8, save_dir="./checkpoints_controlnet", phase="standard", save_every=5, video_every=2)
+    trainer.train(epochs=4, save_dir="./checkpoints_controlnet", phase="standard", save_every=2, video_every=1)
     
-    trainer.train(epochs=7, save_dir="./checkpoints_controlnet_rollout", phase="rollout", save_every=4, video_every=2, rollout_steps=5)
-    
-    trainer.train(epochs=6, save_dir="./checkpoints_controlnet_rollout", phase="rollout", save_every=4, video_every=2, rollout_steps=10)
-    
-    trainer.train(epochs=5, save_dir="./checkpoints_controlnet_rollout", phase="rollout", save_every=4, video_every=2, rollout_steps=15)
-    
-    trainer.train(epochs=10, save_dir="./checkpoints_controlnet_rollout", phase="rollout", save_every=4, video_every=2, rollout_steps=20)
-    
-    
+    trainer.train(epochs=6, save_dir="./checkpoints_controlnet_rollout", phase="rollout", save_every=2, video_every=1, rollout_steps=10)
+        
     # trainer.unfreeze_transformer(lr=1e-5)
-    
-    # trainer.train(epochs=4, save_dir="./checkpoints_std", save_every=2, video_every=1, is_rollout_phase=False)
-    
-    # trainer.train(epochs=10, save_dir="./checkpoints_rollout", save_every=2, video_every=1, is_rollout_phase=True, rollout_steps=10)
-    
     # trainer.unfreeze_unet(lr=1e-6)
