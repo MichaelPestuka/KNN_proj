@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import random
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -351,7 +352,12 @@ def _encode_initial_latent_buffer(
 
 
 class InferenceEngine:
-    """Rolling-window GameNGen inference: 9 past frames/actions + current action -> next frame."""
+    """Rolling-window GameNGen inference: 9 past frames/actions + current action -> next frame.
+
+    When *vae_device* differs from *device*, the VAE decoder runs on a
+    secondary GPU and ``step_jpeg`` pipelines VAE+JPEG of frame N with
+    UNet denoising of frame N+1.
+    """
 
     def __init__(
         self,
@@ -363,6 +369,7 @@ class InferenceEngine:
         text_encoder,
         device: torch.device,
         *,
+        vae_device: torch.device | None = None,
         start_image_path: Path | None = None,
         num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
         do_classifier_free_guidance: bool = False,
@@ -376,6 +383,7 @@ class InferenceEngine:
         self._tokenizer = tokenizer
         self._text_encoder = text_encoder
         self._device = device
+        self._vae_device = vae_device or device
         self._num_inference_steps = num_inference_steps
         self._do_cfg = do_classifier_free_guidance
         self._guidance_scale = guidance_scale
@@ -385,6 +393,12 @@ class InferenceEngine:
             device.type if isinstance(device, torch.device) else str(device).split(":")[0]
         )
         self._amp_dtype = _autocast_dtype(device)
+        self._vae_amp_dtype = _autocast_dtype(self._vae_device)
+        self._vae_device_type = (
+            self._vae_device.type
+            if isinstance(self._vae_device, torch.device)
+            else str(self._vae_device).split(":")[0]
+        )
         self._vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
         self._img_transform = _default_image_transform()
@@ -397,31 +411,45 @@ class InferenceEngine:
         cl_n = 2 if do_classifier_free_guidance else 1
         self._class_labels = torch.zeros(cl_n, dtype=torch.long, device=device)
 
+        # Pipeline decode on secondary GPU when available
+        self._dual_gpu = vae_device is not None and vae_device != device
+        self._decode_executor: ThreadPoolExecutor | None = (
+            ThreadPoolExecutor(max_workers=1) if self._dual_gpu else None
+        )
+        self._pending_jpeg: Future[bytes] | None = None
+
         path = start_image_path or _START_IMAGE
         start = Image.open(path).convert("RGB")
-        self._latent_buffer = _encode_initial_latent_buffer(
+        # Encode via VAE (lives on vae_device), then keep buffer on UNet device
+        latent_buf = _encode_initial_latent_buffer(
             vae,
             self._img_transform,
             start,
-            device,
+            self._vae_device,
             self._vae_scale_factor,
         )
+        self._latent_buffer = latent_buf.to(self._device)
         self._action_buffer: list[int] = [0] * BUFFER_SIZE
 
     def reset(self, start_image_path: Path | None = None) -> None:
         path = start_image_path or _START_IMAGE
         start = Image.open(path).convert("RGB")
-        self._latent_buffer = _encode_initial_latent_buffer(
+        latent_buf = _encode_initial_latent_buffer(
             self._vae,
             self._img_transform,
             start,
-            self._device,
+            self._vae_device,
             self._vae_scale_factor,
         )
+        self._latent_buffer = latent_buf.to(self._device)
         self._action_buffer = [0] * BUFFER_SIZE
 
+    # ------------------------------------------------------------------
+    # Core UNet step (always runs on primary GPU)
+    # ------------------------------------------------------------------
+
     def _step_latent(self, action_index: int) -> torch.Tensor:
-        """Run UNet denoising and update buffers.  Returns the new frame latent."""
+        """Run UNet denoising and update buffers.  Returns the new frame latent on the UNet device."""
         if action_index < 0 or action_index >= NUM_ACTIONS:
             raise ValueError(
                 f"action_index must be in [0, {NUM_ACTIONS}), got {action_index}"
@@ -454,27 +482,69 @@ class InferenceEngine:
         self._action_buffer = self._action_buffer[1:] + [action_index]
         return new_latent
 
-    def step(self, action_index: int) -> Image.Image:
-        """Run one step and return the generated frame as a PIL Image."""
-        new_latent = self._step_latent(action_index)
-        with torch.no_grad(), autocast(device_type=self._device_type, dtype=self._amp_dtype):
-            return decode_and_postprocess(
-                vae=self._vae,
-                image_processor=self._image_processor,
-                latents=new_latent,
-            )
+    # ------------------------------------------------------------------
+    # VAE decode + JPEG (runs on vae_device, possibly in background)
+    # ------------------------------------------------------------------
 
-    def step_jpeg(self, action_index: int, quality: int = 85) -> bytes:
-        """Run one step and return the frame as JPEG bytes (no PIL round-trip)."""
-        new_latent = self._step_latent(action_index)
-        with torch.no_grad(), autocast(device_type=self._device_type, dtype=self._amp_dtype):
+    def _vae_decode_jpeg(self, latent: torch.Tensor, quality: int) -> bytes:
+        """Decode latent → pixels on *_vae_device*, JPEG-encode on CPU."""
+        with torch.no_grad(), autocast(
+            device_type=self._vae_device_type, dtype=self._vae_amp_dtype
+        ):
+            latent_v = latent.to(self._vae_device)
             image = self._vae.decode(
-                new_latent / self._vae.config.scaling_factor, return_dict=False
+                latent_v / self._vae.config.scaling_factor, return_dict=False
             )[0]
-            # [-1, 1] → [0, 255] uint8, on GPU then transfer to CPU
             image = (image[0] / 2 + 0.5).clamp(0, 1)
             image = (image * 255).to(torch.uint8).cpu()
             return encode_jpeg(image, quality=quality).numpy().tobytes()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def step(self, action_index: int) -> Image.Image:
+        """Run one step and return the generated frame as a PIL Image."""
+        new_latent = self._step_latent(action_index)
+        latent_for_vae = new_latent.to(self._vae_device)
+        with torch.no_grad(), autocast(
+            device_type=self._vae_device_type, dtype=self._vae_amp_dtype
+        ):
+            return decode_and_postprocess(
+                vae=self._vae,
+                image_processor=self._image_processor,
+                latents=latent_for_vae,
+            )
+
+    def step_jpeg(self, action_index: int, quality: int = 85) -> bytes:
+        """Run one step and return the frame as JPEG bytes.
+
+        With dual GPU, VAE decode of the current frame is pipelined with the
+        *next* call's UNet pass.  This adds one frame of display latency but
+        keeps both GPUs busy simultaneously.
+        """
+        # UNet on primary GPU — while this runs, the previous frame's VAE+JPEG
+        # may still be executing on the secondary GPU (that's the overlap).
+        new_latent = self._step_latent(action_index)
+
+        if self._decode_executor is None:
+            # Single-GPU path: synchronous
+            return self._vae_decode_jpeg(new_latent, quality)
+
+        # Dual-GPU pipelined path
+        new_future = self._decode_executor.submit(
+            self._vae_decode_jpeg, new_latent, quality
+        )
+
+        if self._pending_jpeg is not None:
+            # Steady state: previous frame's JPEG is ready (VAE << UNet)
+            result = self._pending_jpeg.result()
+        else:
+            # First frame: no previous result yet, wait synchronously
+            result = new_future.result()
+
+        self._pending_jpeg = new_future
+        return result
 
 
 def main(model_folder: str) -> None:

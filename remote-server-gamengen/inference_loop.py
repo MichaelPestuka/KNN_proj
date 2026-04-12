@@ -63,10 +63,19 @@ def main() -> None:
         if torch.backends.mps.is_available()
         else "cpu"
     )
+
+    vae_device = None
+    if device.type == "cuda" and torch.cuda.device_count() >= 2:
+        vae_device = torch.device("cuda", 1)
+        logger.info(
+            "Dual GPU detected: UNet on %s, VAE on %s (pipelined)",
+            device,
+            vae_device,
+        )
     logger.info("Loading model from %s on %s", args.model_folder, device)
 
     unet, vae, action_embedding, noise_scheduler, tokenizer, text_encoder = load_model(
-        args.model_folder, device
+        args.model_folder, device, vae_device=vae_device
     )
     engine = InferenceEngine(
         unet,
@@ -76,6 +85,7 @@ def main() -> None:
         tokenizer,
         text_encoder,
         device,
+        vae_device=vae_device,
     )
 
     sys.stderr.write(READY_LINE)
