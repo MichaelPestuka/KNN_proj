@@ -116,6 +116,15 @@ While we discussed PSNR previously, we are currently focusing on less pixel-leve
 
 We have employed both PSNR and LPIPS in an evaluation script, but currently our models generate images outside the scope of this kind of evaluation, failing to model primary game mechanics.
 
+You can see an example per frame evaluation in figure \ref{fig:basic_eval}. A side by side GIF of the ground truth and generated frames from the best and worst example shown (training example \texttt{0aa9351d} and \texttt{0aaa90ef}) can be viewed at TODO ADD REAL GITHUB BLOB URL.
+
+\begin{figure*}
+  \centering
+  \includegraphics[width=\textwidth]{figures/batch_eval_first_gen_data_frame_metrics.png}
+  \caption{An evaluation of per-frame metrics on a few runs from the training set. Not reprenstative of generalization performance, but a demonstration of our working evaluation. On unseen data performance graphs just show random noise, for now.}
+  \label{fig:basic_eval}
+\end{figure*}
+
 % I WILL REDO THIS VALIDATION TOMORROW ON BOTH THE OG DATA 250k AND SECOND GEN GAMENGEN MODEL
 
 \section{Future work}
