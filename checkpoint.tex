@@ -114,9 +114,9 @@ Currently we do not have a remote interactive application of the ControlNet base
 
 While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. One of these is LPIPS (Learned Perceptual Image Patch Similarity) \footnote{\url{https://arxiv.org/abs/1801.03924}}, which is also cited in the GameNGen paper. This metric is also available from a PyPI package from the authors of the paper\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}.
 
-We have employed both PSNR and LPIPS in an evaluation script, but currently our models generate images outside the scope of this kind of evaluation, failing to model primary game mechanics.
+We have employed both PSNR and LPIPS in an evaluation script, but currently our models generate images outside the scope of this kind of evaluation, failing to model primary game mechanics on unseen data.
 
-You can see an example per frame evaluation in figure \ref{fig:basic_eval}. A side by side GIF of the ground truth and generated frames from the best and worst example shown (training example \texttt{0aa9351d} and \texttt{0aaa90ef}) can be viewed at TODO ADD REAL GITHUB BLOB URL.
+You can see an example per frame evaluation in figure \ref{fig:basic_eval}. A side by side GIF of the ground truth and generated frames from the best and worst example shown (training example \texttt{0aa9351d} and \texttt{0aaa90ef} respectively) can be viewed at \url{https://github.com/MichaelPestuka/KNN\_proj/tree/be189cbf683eac64d27bfda323cdc9953e7e1646/figures/GIFs}.
 
 \begin{figure*}
   \centering
