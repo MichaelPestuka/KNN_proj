@@ -3,12 +3,19 @@
 Overlay visited `(x_pos, y_pos)` points from one or more `run.json` files onto
 `SuperMarioBrosMap1-1.png`.
 
+Only frames with `frames[*].info.world == 1` and `frames[*].info.stage == 1`
+are plotted. If a run includes other levels, those frames are omitted; the run id
+is printed once when anything was omitted, or once when the run had no W1-1 data.
+
 Coordinate mapping:
-- Uses per-frame `frames[*].info.x_pos` / `frames[*].info.y_pos`.
-- Applies an offset so that the *first* frame matches a target start coordinate
-  (defaults to your provided `X=48, Y=46`).
-- By default, inverts Y to match typical image coordinates (origin at top-left):
-  `pixel_y = map_height - y_corrected`.
+- Uses per-frame `frames[*].info.x_pos` / `frames[*].info.y_pos` (absolute in-game
+  coordinates).
+- Same translation the original script used when the **first recorded frame** was at
+  game `(assumed_start_x, assumed_start_y)` (defaults `40, 79`): fixed offsets
+  `dx = target_start_x - assumed_start_x`, `dy = target_start_y - assumed_start_y`
+  (targets default to `48, 46` like `--target-start-x` / `--target-start-y`), then
+  `x_corr = (x_pos + dx) * scale_x` and by default `pixel_y = map_height - y_corr`.
+  Actual first-frame positions in the JSON are **not** used for alignment.
 
 This is intentionally configurable via CLI in case your coordinate convention
 differs slightly.
@@ -67,16 +74,34 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--assumed-start-x",
+        type=float,
+        default=40.0,
+        help=(
+            "Game X the original mapping assumed for the first frame (default: 40). "
+            "Used with --target-start-x to build a fixed dx; actual run starts are ignored."
+        ),
+    )
+    p.add_argument(
+        "--assumed-start-y",
+        type=float,
+        default=79.0,
+        help=(
+            "Game Y the original mapping assumed for the first frame (default: 79). "
+            "Used with --target-start-y to build a fixed dy."
+        ),
+    )
+    p.add_argument(
         "--target-start-x",
         type=float,
         default=48.0,
-        help="Corrected coordinate X for the first frame (default: 48).",
+        help="Corrected coordinate X paired with assumed start (default: 48).",
     )
     p.add_argument(
         "--target-start-y",
         type=float,
         default=46.0,
-        help="Corrected coordinate Y for the first frame (default: 46).",
+        help="Corrected coordinate Y paired with assumed start (default: 46).",
     )
     p.add_argument(
         "--scale-x",
@@ -212,25 +237,59 @@ def _discover_run_specs(collected_data_dir: Path, max_runs: int | None) -> list[
     return out
 
 
-def _load_frames(json_path: Path) -> tuple[float, float, list[tuple[float, float]]]:
+def _run_display_id(run: RunSpec, run_id: str | None) -> str:
+    return run_id if run_id else run.label
+
+
+def _load_frames(
+    json_path: Path,
+) -> tuple[float, float, list[tuple[float, float, object, object]], str | None]:
+    """Load per-frame positions with world/stage from each frame's `info`."""
     with json_path.open("r", encoding="utf-8") as f:
         meta = json.load(f)
     frames = meta.get("frames") or []
     if not frames:
         raise ValueError(f"No frames in {json_path}")
 
-    pts: list[tuple[float, float]] = []
+    run_id = meta.get("run_id")
+    run_id = run_id if isinstance(run_id, str) else None
+
+    pts: list[tuple[float, float, object, object]] = []
     for fr in frames:
         info = fr.get("info") or {}
         if "x_pos" not in info or "y_pos" not in info:
             continue
-        pts.append((float(info["x_pos"]), float(info["y_pos"])))
+        pts.append(
+            (
+                float(info["x_pos"]),
+                float(info["y_pos"]),
+                info.get("world"),
+                info.get("stage"),
+            )
+        )
 
     if not pts:
         raise ValueError(f"No (x_pos, y_pos) points in {json_path}")
 
-    x0, y0 = pts[0]
-    return x0, y0, pts
+    x0, y0, _, _ = pts[0]
+    return x0, y0, pts, run_id
+
+
+def _world1_stage1_points(
+    pts: list[tuple[float, float, object, object]],
+) -> tuple[list[tuple[float, float]], bool]:
+    """
+    Keep only frames where info.world == 1 and info.stage == 1.
+    Returns (filtered points, True if any positioned frame was not W1-S1).
+    """
+    w1: list[tuple[float, float]] = []
+    has_non_w1s1 = False
+    for x, y, w, s in pts:
+        if w == 1 and s == 1:
+            w1.append((x, y))
+        else:
+            has_non_w1s1 = True
+    return w1, has_non_w1s1
 
 
 def _draw_point(draw: ImageDraw.ImageDraw, x: float, y: float, r: int, color: tuple[int, int, int, int]) -> None:
@@ -262,12 +321,10 @@ def main() -> int:
     out_img = map_img.copy()
     draw = ImageDraw.Draw(out_img, "RGBA")
 
-    for run_i, run in enumerate(runs):
-        x0_json, y0_json, pts = _load_frames(run.json_path)
-
-        # Correction so that the first frame maps to the user-provided start.
-        dx = float(args.target_start_x) - x0_json
-        dy = float(args.target_start_y) - y0_json
+    # Fixed shift as if every run began at assumed_start, matching legacy behavior when
+    # first frames were always ~ (40, 79).
+    dx = float(args.target_start_x) - float(args.assumed_start_x)
+    dy = float(args.target_start_y) - float(args.assumed_start_y)
 
     if args.mode == "heatmap":
         # Build heat accumulation grid at a lower resolution for speed.
@@ -281,14 +338,22 @@ def main() -> int:
             return -5 <= px <= (w + 5) and -5 <= py <= (h + 5)
 
         for run_i, run in enumerate(runs):
-            x0_json, y0_json, pts = _load_frames(run.json_path)
+            _, _, pts, json_run_id = _load_frames(run.json_path)
+            display_id = _run_display_id(run, json_run_id)
+            pts_w1, has_non_w1s1 = _world1_stage1_points(pts)
 
-            dx = float(args.target_start_x) - x0_json
-            dy = float(args.target_start_y) - y0_json
+            if not pts_w1:
+                print(f"Run {display_id}: skipped (no frames in world 1, stage 1).")
+                continue
+            if has_non_w1s1:
+                print(
+                    f"Run {display_id}: ignored frames not in world 1, stage 1 "
+                    f"(heatmap uses W1-1 only)."
+                )
 
-            # Save start/end marker positions (so we don't re-parse the JSON).
-            (x_start, y_start) = pts[0]
-            (x_end, y_end) = pts[-1]
+            # Save start/end marker positions from filtered W1-1 trace.
+            (x_start, y_start) = pts_w1[0]
+            (x_end, y_end) = pts_w1[-1]
 
             def to_px(x_pos: float, y_pos: float) -> tuple[float, float]:
                 x_corr = (x_pos + dx) * args.scale_x
@@ -301,7 +366,7 @@ def main() -> int:
             pex, pey = to_px(float(x_end), float(y_end))
             markers.append((psx, psy, pex, pey))
 
-            for (x_pos, y_pos) in pts:
+            for (x_pos, y_pos) in pts_w1:
                 x_corr = (x_pos + dx) * args.scale_x
                 y_corr = (y_pos + dy) * args.scale_y
                 px = x_corr
@@ -361,10 +426,18 @@ def main() -> int:
     else:
         # Dots mode: draw per-frame points (optionally connected).
         for run_i, run in enumerate(runs):
-            x0_json, y0_json, pts = _load_frames(run.json_path)
+            _, _, pts, json_run_id = _load_frames(run.json_path)
+            display_id = _run_display_id(run, json_run_id)
+            pts_w1, has_non_w1s1 = _world1_stage1_points(pts)
 
-            dx = float(args.target_start_x) - x0_json
-            dy = float(args.target_start_y) - y0_json
+            if not pts_w1:
+                print(f"Run {display_id}: skipped (no frames in world 1, stage 1).")
+                continue
+            if has_non_w1s1:
+                print(
+                    f"Run {display_id}: ignored frames not in world 1, stage 1 "
+                    f"(dots use W1-1 only)."
+                )
 
             alpha_255 = max(0, min(255, int(float(args.alpha) * 255.0)))
 
@@ -387,7 +460,7 @@ def main() -> int:
                 end_color = (160, 160, 160, alpha_255)
 
             pixel_points: list[tuple[float, float]] = []
-            for (x_pos, y_pos) in pts:
+            for (x_pos, y_pos) in pts_w1:
                 x_corr = (x_pos + dx) * args.scale_x
                 y_corr = (y_pos + dy) * args.scale_y
                 px = x_corr
