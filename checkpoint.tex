@@ -28,9 +28,9 @@ The goal of our project is to create a playable simulation of a computer game by
 
 \section{Data generation}
 
-For generating the training data, a Mario Brothers emulator \footnote{\url{https://github.com/Kautenja/gym-super-mario-bros}} was used, as the Gymnasium framework did not have the NES game we were looking for. For controlling the game while generating the data, 3 strategies were originally used. A fully random strategy, with a uniform distribution of all the provided \texttt{SIMPLE\_MOVEMENT} actions and some action stickieness over several frames. The second strategy relyed on a pre-traing AI\footnote{\url{https://github.com/yumouwei/super-mario-bros-reinforcement-learning}} with the third being a combination, with random length few second periods of one or the other.
+For generating the training data, a Mario Brothers emulator \footnote{\url{https://github.com/Kautenja/gym-super-mario-bros}} was used, as the Gymnasium framework did not have the NES game we were looking for. For controlling the game while generating the data, three strategies were originally used. The first was fully random, with a uniform distribution of all the provided \texttt{SIMPLE\_MOVEMENT} actions and some action stickiness over several frames. The second strategy relied on a pre-trained AI\footnote{\url{https://github.com/yumouwei/super-mario-bros-reinforcement-learning}}, and the third was a combination with random-length few-second periods of one or the other.
 
-This combination lead to a very good coverage of the first level of the game, see figure \ref{fig:level_coverage}.
+This combination led to very good coverage of the first level of the game; see figure \ref{fig:level_coverage}.
 
 \begin{figure*}
   \centering
@@ -52,14 +52,14 @@ The character trajectories were also very varied, see \ref{fig:level_trajectorie
 
 The first attempt training mix (seen in these figures) was 1000 runs of combined, 100 of fully random and only one run off the optimal AI policy, given that was pixel perfect repeatable. This did not turn out to be and optimal mix, along with another issue not entirely visible from the validation images shown here.
 
-The \texttt{SIMPLE\_MOVEMENT} control mechanism provided by the emulator does allow for movement \texttt{left} and \texttt{right}, but only has combinations with the \texttt{A} and \texttt{B} keys for the \texttt{right}, so 4 of the possible 7 actions move the game character forward. This was also exasperated by the AI strategy, which used these actions even more than the uniform random distribution. This resulted in our original training dataset of 665 816 images only containing 5,42\% \texttt{left} actions. As a consequence of these inbalances, our first round of models continued moving the character forward even without user input.
+The \texttt{SIMPLE\_MOVEMENT} control mechanism provided by the emulator does allow for movement \texttt{left} and \texttt{right}, but only has combinations with the \texttt{A} and \texttt{B} keys for the \texttt{right}, so 4 of the possible 7 actions move the game character forward. This was also exacerbated by the AI strategy, which used these actions even more than the uniform random distribution. This resulted in our original training dataset of 665 816 images only containing 5,42\% \texttt{left} actions. As a consequence of these imbalances, our first round of models continued moving the character forward even without user input.
 
 In our enhanced dataset, this was increased to 17,05\% while also increasing the number of frames where no action was taken from 14,81\% to 50,05\%. The impact of this change on our second generation of model checkpoints is not yet known.
 
 \section{GameNGen architecture}
 \label{gamengen}
 
-\section{ControlNet based apoproach}
+\section{ControlNet based approach}
 \label{controlnet}
 
 In this section, we review the foundational literature and prior research that inspire this specific component of our project. We focus primarily on the advancements in conditional image generation through diffusion models, most notably ControlNet, and outline the conceptual framework that guided our implementation. By contextualizing these generative technologies alongside the principles of sequential world modeling, we highlight the rationale behind our specific approach: decoupling the underlying game logic and state prediction from the final visual rendering process.
@@ -70,7 +70,7 @@ In this section, we review the foundational literature and prior research that i
 
 \subsection{Conditional Image Generation via ControlNet}
 
-While traditional diffusion models have achieved remarkable success in high-fidelity image generation, controlling their exact spatial layout using text prompts alone remains highly challenging. To address this limitation, Zhang et al. (2023) introduced ControlNet\footnote{\url{https://arxiv.org/abs/2302.05543}}, an architecture designed to add spatial conditioning controls to large, pre-trained text-to-image diffusion models. By locking the original model weights and training a parallel "copy" of the encoding layers, ControlNet enables the injection of explicit structural priors—such as semantic segmentation masks, depth maps, or Canny edges—without destroying the base model's prior knowledge.  This capability to deterministically guide the structural composition of the output is foundational to our approach, as it provides a robust mechanism to translate abstract, low-dimensional game states (represented as segmentation maps) into two dimensional game-like visual frames.
+While traditional diffusion models have achieved remarkable success in high-fidelity image generation, controlling their exact spatial layout using text prompts alone remains highly challenging. To address this limitation, Zhang et al. (2023) introduced ControlNet\footnote{\url{https://arxiv.org/abs/2302.05543}}, an architecture designed to add spatial conditioning controls to large, pre-trained text-to-image diffusion models. By locking the original model weights and training a parallel "copy" of the encoding layers, ControlNet enables the injection of explicit structural priors—such as semantic segmentation masks, depth maps, or Canny edges—without destroying the base model's prior knowledge.  This capability to deterministically guide the structural composition of the output is foundational to our approach, as it provides a robust mechanism to translate abstract, low-dimensional game states (represented as segmentation maps) into two-dimensional game-like visual frames.
 
 \subsection{Extensions for Video Generation}
 
@@ -89,26 +89,26 @@ Our implementation explicitly decouples state prediction from visual rendering t
 To mitigate the autoregressive drift—a critical challenge in long-horizon game simulation—we employ a phased, multi-step rollout training curriculum. The Transformer and decoder are trained end-to-end, beginning with single-step teacher forcing and progressively scaling up to 100-step autoregressive sequences to force the model to recover from its own accumulated errors. Furthermore, the architecture is optimized using a highly specialized composite loss function to handle the unique domain of 2D game rendering. Alongside standard Binary Cross-Entropy, we integrate a soft Dice loss to heavily penalize errors on small, sparse objects (such as the player or enemies) and a boundary loss (utilizing Sobel edge detection) to enforce crisp semantic borders. Most notably, we introduce a physics-gated spatial loss: by applying a Gaussian prior centered around the Transformer's predicted physical coordinates, the loss function explicitly restricts where the player character can be visually generated, ensuring strict consistency between the internal game physics and the final visual output.
 \section{Interactive}
 
-Given our reliance on high-power cloud infastructure for training and inference we have created a client-server type application for trying out the model interactively, like a real game. Because this is just for testing purposes, it is in the form of a portable python GUI application which initiates an SSH session with our remote VPS, starts the inference process there and then streams JPEG encoded images back while user actions are streamed to the server.
+Given our reliance on high-power cloud infrastructure for training and inference, we have created a client-server type application for trying out the model interactively, like a real game. Because this is just for testing purposes, it is in the form of a portable Python GUI application which initiates an SSH session with our remote VPS, starts the inference process there, and then streams JPEG-encoded images back while user actions are streamed to the server.
 
-For this inference mode on the GameNGen architecture model, only 3 diffusion steps are used. We have also employed a handful of optimizations beyond the latent image buffer used in the base model (see \ref{gamengen}). One of these optimalizations is using 16-bit floating point values, over the original 32-bit. Even tho a latent buffer is used and only the output image needs to be run through the VAE for display, this task was offloaded to a second GPU along with encoding the image into JPEG for transport, keeping the primary running the UNet continuously. This increased FPS by about 12\%. As of the writing of this report we are achiving around 22,5 FPS on a pair of Nvidia RTX PRO 6000 Blackwell GPUs while only utilizing them to about 50\% and 10\% respectively. This results in the relatively tame powerdraw of only 300W combined, about half of the TDP of one of these GPUs.
+For this inference mode on the GameNGen architecture model, only 3 diffusion steps are used. We have also employed a handful of optimizations beyond the latent image buffer used in the base model (see \ref{gamengen}). One of these optimizations is using 16-bit floating-point values instead of the original 32-bit. Even though a latent buffer is used and only the output image needs to be run through the VAE for display, this task was offloaded to a second GPU along with encoding the image into JPEG for transport, keeping the primary GPU running the UNet continuously. This increased FPS by about 12\%. As of the writing of this report, we are achieving around 22,5 FPS on a pair of Nvidia RTX PRO 6000 Blackwell GPUs while only utilizing them to about 50\% and 10\% respectively. This results in the relatively tame power draw of only 300W combined, about half of the TDP of one of these GPUs.
 
-Currently we do not have a remote iteractive application of the ControlNet based model.
+Currently we do not have a remote interactive application of the ControlNet based model.
 
 \section{Evaluation}
 
-While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. On of these is LPIPS (Learned Perceptual Image Patch Similarity) \footnote{\url{https://arxiv.org/abs/1801.03924}}, which is also cited in the GameNGen paper. This metric is also available from a PyPi package from the authors of the paper\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}.
+While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. One of these is LPIPS (Learned Perceptual Image Patch Similarity) \footnote{\url{https://arxiv.org/abs/1801.03924}}, which is also cited in the GameNGen paper. This metric is also available from a PyPI package from the authors of the paper\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}.
 
 We have employed both PSNR and LPIPS in an evaluation script, but currently our models generate images outside the scope of this kind of evaluation, failing to model primary game mechanics.
 
-% I WILL REDO THIS VALIDATION TOMMOROW ON BOTH THE OG DATA 250k AND SECOND GEN GAMENGEN MODEL
+% I WILL REDO THIS VALIDATION TOMORROW ON BOTH THE OG DATA 250k AND SECOND GEN GAMENGEN MODEL
 
 \section{Future work}
 
-Currently we are focusing on re-running our training with the update dataset. If this section hasn't been updated with the results then something probably went wrong.
+Currently we are focusing on re-running our training with the updated dataset. If this section hasn't been updated with the results then something probably went wrong.
 
-Further I would like to explore training a smaller, purpose-built transformer ground-up to achieve better performance on more reasonable hardware, like a laptop GPU.
+Further, I would like to explore training a smaller, purpose-built transformer from the ground up to achieve better performance on more reasonable hardware, like a laptop GPU.
 
-I encourage my collegues to add to this section ofcourse.
+I encourage my colleagues to add to this section, of course.
 
 \end{document}
