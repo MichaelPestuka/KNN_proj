@@ -59,10 +59,34 @@ In our enhanced dataset, this was increased to 17,05\% while also increasing the
 \section{GameNGen architecture}
 \label{gamengen}
 
-\section{ControlNet based}
+\section{ControlNet based apoproach}
+\label{controlnet}
+
+In this section, we review the foundational literature and prior research that inspire this specific component of our project. We focus primarily on the advancements in conditional image generation through diffusion models, most notably ControlNet, and outline the conceptual framework that guided our implementation. By contextualizing these generative technologies alongside the principles of sequential world modeling, we highlight the rationale behind our specific approach: decoupling the underlying game logic and state prediction from the final visual rendering process.
 
 % @PRASA I AM GONNA NEED SOME ROLLOUTS AND THEIR GROUND TRUTH DATA FOLDERS TO INCLUDE THE MODEL IN EVALUATION SECTION, OR A GUIDE ON HOW TO RUN IT. HAVE NOT TRIED YET, MAYBE THE LLMS CAN FIGURE IT OUT
 
+% \subsection{Related work and inspiration}
+
+\subsection{Conditional Image Generation via ControlNet}
+
+While traditional diffusion models have achieved remarkable success in high-fidelity image generation, controlling their exact spatial layout using text prompts alone remains highly challenging. To address this limitation, Zhang et al. (2023) introduced ControlNet\footnote{\url{https://arxiv.org/abs/2302.05543}}, an architecture designed to add spatial conditioning controls to large, pre-trained text-to-image diffusion models. By locking the original model weights and training a parallel "copy" of the encoding layers, ControlNet enables the injection of explicit structural priors—such as semantic segmentation masks, depth maps, or Canny edges—without destroying the base model's prior knowledge.  This capability to deterministically guide the structural composition of the output is foundational to our approach, as it provides a robust mechanism to translate abstract, low-dimensional game states (represented as segmentation maps) into two dimensional game-like visual frames.
+
+\subsection{Extensions for Video Generation}
+
+Although ControlNet excels at conditional static image generation, applying it naively on a frame-by-frame basis for game simulation inherently leads to temporal inconsistency, often manifested as severe visual flickering or morphological shifting. To mitigate this within the diffusion process itself, subsequent research introduced temporal extensions such as ControlVideo\footnote{\url{https://arxiv.org/abs/2305.13077}}. These methods typically incorporate cross-frame attention mechanisms and temporal smoothing directly into the diffusion pipeline to ensure coherence across sequences. However, our project specifically diverges from this approach; we do not utilize these native video-diffusion extensions. Instead, we isolate the problem of temporal consistency by handling the sequential dynamics entirely outside the diffusion rendering phase.
+
+\subsection{World Models and Sequential Game Simulation}
+
+The concept of learning the internal dynamics of an environment to simulate future states was popularized by Ha and Schmidhuber (2018)\footnote{\url{https://arxiv.org/abs/1803.10122}} through the paradigm of World Models. In their foundational work, an agent learns a compressed spatial representation of a game environment and utilizes a sequence model to predict future latent states based on current observations and player actions. Our architecture integrates this philosophy into the diffusion-based pipeline. Rather than relying on a video diffusion model to guess temporal changes, we employ a Transformer architecture to act as our predictive World Model. The Transformer is explicitly responsible for computing the temporal physics, game logic, and state transitions, ultimately outputting a predicted structural layout for the next frame. Consequently, the ControlNet acts purely as a conditioned rendering engine. This decoupling of "game logic" (handled by the Transformer) and "graphics rendering" (handled by ControlNet) creates a highly controllable and cohesive game simulation pipeline.
+
+\subsection{Architectural Design and Inference Pipeline}
+
+Our implementation explicitly decouples state prediction from visual rendering to maximize control and stability. The core predictive engine is a Transformer-based world model that processes sequential concatenations of physical coordinates, player actions, and compressed visual latents (extracted via a frozen Autoencoder and a custom CNN compressor). Instead of directly outputting RGB pixels, the Transformer predicts a latent representation of the next state, which is subsequently upsampled by a custom decoder into a multi-class semantic segmentation mask. This intermediate mask serves as the explicit structural bridge to the generative phase. For rendering, we utilize a pre-trained Stable Diffusion model coupled with a semantic ControlNet. The ControlNet simply receives the upscaled segmentation map as a conditioning image, deterministically guiding the diffusion pipeline to render high-fidelity frames that obey the Transformer's underlying spatial and physical logic.
+
+\subsection{Progressive Training Schema and Tailored Objectives}
+
+To mitigate the autoregressive drift—a critical challenge in long-horizon game simulation—we employ a phased, multi-step rollout training curriculum. The Transformer and decoder are trained end-to-end, beginning with single-step teacher forcing and progressively scaling up to 100-step autoregressive sequences to force the model to recover from its own accumulated errors. Furthermore, the architecture is optimized using a highly specialized composite loss function to handle the unique domain of 2D game rendering. Alongside standard Binary Cross-Entropy, we integrate a soft Dice loss to heavily penalize errors on small, sparse objects (such as the player or enemies) and a boundary loss (utilizing Sobel edge detection) to enforce crisp semantic borders. Most notably, we introduce a physics-gated spatial loss: by applying a Gaussian prior centered around the Transformer's predicted physical coordinates, the loss function explicitly restricts where the player character can be visually generated, ensuring strict consistency between the internal game physics and the final visual output.
 \section{Interactive}
 
 Given our reliance on high-power cloud infastructure for training and inference we have created a client-server type application for trying out the model interactively, like a real game. Because this is just for testing purposes, it is in the form of a portable python GUI application which initiates an SSH session with our remote VPS, starts the inference process there and then streams JPEG encoded images back while user actions are streamed to the server.
