@@ -172,7 +172,7 @@ class DiffusionPipeline:
         self,
         states: torch.Tensor,    # [1, seq_len, total_state_dim]
         actions: torch.Tensor,   # [1, seq_len, action_dim]
-        control_scale=1.5,
+        control_scale=1.3,
         num_inference_steps=4,
         generator=None,
     ):
@@ -184,7 +184,7 @@ class DiffusionPipeline:
 
         with torch.inference_mode():
             pred     = self.transformer(states, actions)
-            pred_seg = self.decoder(pred)               # [1, 6, 128, 128]
+            pred_seg = self.decoder(pred)[0]               # [1, 6, 128, 128]
 
             # Mario kanál z predikované fyziky
             # pred_cx = pred["physics"][:, 4]
@@ -208,7 +208,7 @@ class DiffusionPipeline:
                 image=control_512,
                 height=512,
                 width=512,
-                guidance_scale=30.5,
+                guidance_scale=30.0,
                 controlnet_conditioning_scale=control_scale,
                 num_inference_steps=num_inference_steps,
                 output_type="pt",
@@ -456,7 +456,7 @@ class Trainer:
 
             # Transformer → seg mapa → RGB control
             pred     = self.transformer(states, actions)
-            pred_seg = self.decoder(pred)
+            pred_seg = self.decoder(pred)[0]
             # pred_seg[:, 2:3] = (
             #     create_mario_map(torch.clamp(pred["physics"][:, 4], 0.0, 1.0), torch.clamp(pred["physics"][:, 5], 0.0, 1.0), size=128)
             #     * 20.0 - 10.0
@@ -523,7 +523,7 @@ class Trainer:
 
             with self.accelerator.autocast():
                 pred     = self.transformer(states, actions)
-                pred_seg = self.decoder(pred)
+                pred_seg = self.decoder(pred)[0]
                 # pred_seg[:, 2:3] = (
                 #     create_mario_map(torch.clamp(pred["physics"][:, 4], 0.0, 1.0), torch.clamp(pred["physics"][:, 5], 0.0, 1.0), size=128)
                 #     * 20.0 - 10.0
@@ -810,7 +810,7 @@ if __name__ == "__main__":
     data_loader_rollout = get_rollout_dataloader(
         root_dir="../data-generation/super-mario-bros/collected_data",
         seg_dir="mario_data_seg",
-        batch_size=16,
+        batch_size=64,
         shuffle=True,
         num_workers=4,
         image_size=256,
@@ -828,10 +828,10 @@ if __name__ == "__main__":
     # --- Init pipeline ---
     pipeline = DiffusionPipeline(transformer, decoder, compressor, device=accelerator.device, torch_dtype=torch.bfloat16, compile=False)
 
-    load_controlnet_checkpoint(pipeline, dir="./checkpoints_controlnet", epoch=3, device=accelerator.device, unet=False)
+    # load_controlnet_checkpoint(pipeline, dir="./checkpoints_controlnet", epoch=3, device=accelerator.device, unet=False)
     
     load_transformer_checkpoints(
-        "checkpoints_transformer/checkpoint_rollout_best.pt",
+        "checkpoints_transformer/checkpoint_rollout.pt",
         pipeline.transformer,
         pipeline.decoder,
         pipeline.compressor,
@@ -851,7 +851,7 @@ if __name__ == "__main__":
 
     trainer = Trainer(pipeline, dataloader=None, rollout_dataloader=data_loader_rollout, accelerator=accelerator, lr=1e-4)
         
-    trainer.train(epochs=6, save_dir="./checkpoints", phase="gt_pretrain", save_every=5, video_every=2)
+    trainer.train(epochs=4, save_dir="./checkpoints", phase="gt_pretrain", save_every=5, video_every=2)
     
     trainer.train(epochs=4, save_dir="./checkpoints_controlnet", phase="standard", save_every=2, video_every=1)
     

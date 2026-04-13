@@ -80,7 +80,6 @@ class GameStateTransformer(nn.Module):
         physics_next      = last_physics + self.physics_head(cls_out)   # [B, 6]
         visual_next       = last_visual  + self.visual_head(cls_out)    # [B, visual_embed_dim]
         
-        # Latent state generujeme absolutně, protože Tanh() ho drží v bezpečných mezích [-1, 1]
         latent_state_next = self.latent_state_head(cls_out)             # [B, latent_state_dim]
 
         return {
@@ -115,23 +114,89 @@ class SegmentationDecoder(nn.Module):
     def __init__(self, visual_embed_dim=124, latent_state_dim=64, num_classes=8):
         super().__init__()
         in_dim = visual_embed_dim + latent_state_dim
-        self.pre = nn.Linear(in_dim, 32 * 8 * 8)
-        self.net = nn.Sequential(
-            nn.ConvTranspose2d(32, 32, 4, stride=2, padding=1),  # 16×16
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 32, 4, stride=2, padding=1),  # 32×32
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1),  # 64×64
-            nn.ReLU(),
-            nn.ConvTranspose2d(16, 16, 4, stride=2, padding=1),  # 128×128
-            nn.ReLU(),
-            nn.Conv2d(16, num_classes, 1),                       # [B, num_classes, 128, 128]
-        )
+        self.pre = nn.Linear(in_dim, 64 * 8 * 8)  # více kanálů na startu
+
+        def up_block(in_ch, out_ch):
+            return nn.Sequential(
+                nn.ConvTranspose2d(in_ch, out_ch, 4, stride=2, padding=1),
+                nn.GroupNorm(8, out_ch),   # GroupNorm > BatchNorm pro malé batch
+                nn.GELU(),
+                # Residual refinement po upsample
+                nn.Conv2d(out_ch, out_ch, 3, padding=1),
+                nn.GroupNorm(8, out_ch),
+                nn.GELU(),
+            )
+
+        self.up1 = up_block(64, 64)   # 8→16
+        self.up2 = up_block(64, 32)   # 16→32
+        self.up3 = up_block(32, 32)   # 32→64
+        self.up4 = up_block(32, 16)   # 64→128
+
+        # Auxiliary head ze 32×32 — intermediate supervision
+        self.aux_head = nn.Conv2d(32, num_classes, 1)
+        # Hlavní výstup
+        self.final    = nn.Conv2d(16, num_classes, 1)
 
     def forward(self, pred: dict):
         z = torch.cat([pred["visual"], pred["latent_state"]], dim=-1)
-        x = self.pre(z).view(-1, 32, 8, 8)
-        return self.net(x)
+        x = self.pre(z).view(-1, 64, 8, 8)
+
+        x = self.up1(x)   # [B, 64, 16, 16]
+        x = self.up2(x)   # [B, 32, 32, 32]
+        aux = self.aux_head(x)   # [B, C, 32, 32] — auxiliary output
+        x = self.up3(x)   # [B, 32, 64, 64]
+        x = self.up4(x)   # [B, 16, 128, 128]
+
+        return self.final(x), aux  # vrátí tuple
+    
+def boundary_loss(pred_logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """
+    Spočítá BCE pouze na pixelech u hranic tříd v targetu.
+    pred_logits: [B, C, H, W]
+    target:      [B, C, H, W] one-hot float
+    """
+    # Sobel na target one-hot → kde jsou hrany
+    sobel_x = torch.tensor([[-1,0,1],[-2,0,2],[-1,0,1]], 
+                             dtype=target.dtype, device=target.device)
+    sobel_y = sobel_x.T
+
+    # Aplikuj na každý kanál zvlášť
+    B, C, H, W = target.shape
+    t_flat = target.view(B * C, 1, H, W)
+    
+    kx = sobel_x.view(1, 1, 3, 3)
+    ky = sobel_y.view(1, 1, 3, 3)
+    
+    edge_x = F.conv2d(t_flat, kx, padding=1)
+    edge_y = F.conv2d(t_flat, ky, padding=1)
+    edge_mag = (edge_x**2 + edge_y**2).sqrt().view(B, C, H, W)
+    
+    # Normalizovaná maska hran [0, 1]
+    edge_mask = (edge_mag > 0.3).float()
+    
+    if edge_mask.sum() < 1:
+        return torch.tensor(0.0, device=target.device)
+
+    bce = F.binary_cross_entropy_with_logits(pred_logits, target, reduction='none')
+    return (bce * edge_mask).sum() / edge_mask.sum().clamp(min=1)
+
+def dice_loss(pred_logits: torch.Tensor, target: torch.Tensor, 
+              eps: float = 1e-6) -> torch.Tensor:
+    """
+    Soft dice loss přes všechny kanály.
+    Ideální pro malé objekty (Mario, enemy) — BCE je vůči nim slepá.
+    """
+    pred = torch.sigmoid(pred_logits)    # [B, C, H, W]
+    
+    # Flatten spatial dims
+    pred_f   = pred.flatten(2)           # [B, C, H*W]
+    target_f = target.flatten(2)         # [B, C, H*W]
+    
+    intersection = (pred_f * target_f).sum(dim=2)          # [B, C]
+    union        = pred_f.sum(dim=2) + target_f.sum(dim=2) # [B, C]
+    
+    dice = (2 * intersection + eps) / (union + eps)        # [B, C]
+    return 1.0 - dice.mean()
     
 def create_mario_map(cam_x, cam_y, size=128, box_h=0.062, box_w=0.05):
     B      = cam_x.shape[0]
@@ -243,6 +308,68 @@ def save_segmentation_debug(pred, target, path, target_image):
 
     save_image(combined, path)
 
+def mario_gated_seg_loss(
+    pred_seg: torch.Tensor,       # [B, C, H, W] logity
+    target_seg: torch.Tensor,     # [B, C, H, W] one-hot
+    pred_physics: torch.Tensor,   # [B, 6] — indexy 4,5 jsou cx,cy
+    class_weights: torch.Tensor,
+    mario_channel: int = 2,
+    gate_sigma: float = 0.15,     # šířka gaussiánu kolem predikované pozice
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Pro Mario kanál omezí kde smí predikce existovat pomocí gaussiánu
+    kolem physics-predikované pozice. Ostatní kanály počítají loss normálně.
+    """
+    B, C, H, W = pred_seg.shape
+    device = pred_seg.device
+
+    # --- Gaussian prior kolem predikované pozice ---
+    pred_cx = torch.clamp(pred_physics[:, 4], 0.0, 1.0)
+    pred_cy = torch.clamp(pred_physics[:, 5], 0.0, 1.0)
+
+    grid_y, grid_x = torch.meshgrid(
+        torch.linspace(0, 1, H, device=device),
+        torch.linspace(0, 1, W, device=device),
+        indexing='ij'
+    )
+    cx = pred_cx.view(B, 1, 1)
+    cy = pred_cy.view(B, 1, 1)
+    dist2 = (grid_x.unsqueeze(0) - cx)**2 + (grid_y.unsqueeze(0) - cy)**2
+    # Gaussián — 1.0 u predikované pozice, blízko 0 daleko od ní
+    gate = torch.exp(-dist2 / (2 * gate_sigma**2)).unsqueeze(1)  # [B, 1, H, W]
+
+    # --- BCE loss ---
+    raw_bce = F.binary_cross_entropy_with_logits(pred_seg, target_seg, reduction='none')
+
+    # Pro Mario kanál vynásob BCE gaussiánem — loss daleko od predikce → ~0
+    bce_gated = raw_bce.clone()
+    bce_gated[:, mario_channel:mario_channel+1] *= gate
+
+    loss_bce = (bce_gated * class_weights).mean()
+
+    # --- Dice loss pouze v oblasti gatu ---
+    pred_mario  = torch.sigmoid(pred_seg[:, mario_channel:mario_channel+1])
+    target_mario = target_seg[:, mario_channel:mario_channel+1]
+
+    # Omez predikci i target na oblast gatu
+    pred_mario_gated   = pred_mario  * gate
+    target_mario_gated = target_mario * gate
+
+    eps = 1e-6
+    intersection = (pred_mario_gated * target_mario_gated).flatten(1).sum(dim=1)
+    union        = pred_mario_gated.flatten(1).sum(dim=1) + target_mario_gated.flatten(1).sum(dim=1)
+    mario_dice   = 1.0 - ((2 * intersection + eps) / (union + eps)).mean()
+
+    # Dice pro ostatní kanály bez gatu
+    other_dice = dice_loss(
+        torch.cat([pred_seg[:, :mario_channel], pred_seg[:, mario_channel+1:]], dim=1),
+        torch.cat([target_seg[:, :mario_channel], target_seg[:, mario_channel+1:]], dim=1),
+    )
+
+    loss_dice = mario_dice + other_dice
+
+    return loss_bce, loss_dice
+
 def train_rollout(
     transformer,
     decoder,
@@ -253,7 +380,8 @@ def train_rollout(
     rollout_steps=10,
     seq_len=4,
     num_epochs=20,
-    detach=False
+    detach=False,
+    complex_loss=False
 ):
     transformer.train()
     decoder.train()
@@ -265,9 +393,9 @@ def train_rollout(
     class_weights = torch.tensor([
         1.0,   # 0: background
         2.0,   # 1: ground
-        15.0,  # 2: mario
-        5.0,   # 3: block
-        10.0,  # 4: goomba/enemy
+        20.0,  # 2: mario
+        10.0,   # 3: block
+        15.0,  # 4: goomba/enemy
         0.5,   # 5: cloud
         5.0,   # 6: pipe
         0.5,   # 7: bush
@@ -295,7 +423,7 @@ def train_rollout(
                 actions = batch["all_actions"][:, step:step + seq_len].to(device)
 
                 pred     = transformer(states, actions)
-                pred_seg = decoder(pred)
+                pred_seg, pred_seg_aux = decoder(pred)
 
                 # Mario kanál z predikované fyziky
                 # pred_cx = pred["physics"][:, 4]
@@ -313,25 +441,51 @@ def train_rollout(
                     target_visual = compressor(z_next)           # [B, visual_embed_dim]
 
                 target_seg = build_segmentation_target(batch, t_target).to(device)
+                
+                target_seg_aux = F.interpolate(target_seg, size=(32, 32), mode='nearest')
 
                 # --- Loss ---
                 loss_physics = F.mse_loss(pred["physics"], target_physics)
                 loss_visual  = F.mse_loss(pred["visual"],  target_visual)
                 
-                raw_seg_loss = bce(pred_seg, target_seg)
-                loss_seg = (raw_seg_loss * class_weights).mean()
+                # raw_bce  = F.binary_cross_entropy_with_logits(pred_seg, target_seg, reduction='none')
+                # loss_bce = (raw_bce * class_weights).mean()
+                # loss_dice     = dice_loss(pred_seg, target_seg)
+                # loss_boundary = boundary_loss(pred_seg, target_seg)
+
+                raw_bce_aux = F.binary_cross_entropy_with_logits(pred_seg_aux, target_seg_aux, reduction='none')
+                loss_seg_aux = (raw_bce_aux * class_weights).mean() + dice_loss(pred_seg_aux, target_seg_aux)
+
+                if complex_loss:
+                    loss_bce, loss_dice = mario_gated_seg_loss(
+                        pred_seg, target_seg, pred["physics"], class_weights
+                    )
+                    loss_boundary = boundary_loss(pred_seg, target_seg)
+
+                    loss_seg = loss_bce + 2.0 * loss_dice + 1.0 * loss_boundary + 0.5 * loss_seg_aux
+                else:
+                    raw_bce  = F.binary_cross_entropy_with_logits(pred_seg, target_seg, reduction='none')
+                    loss_bce = (raw_bce * class_weights).mean()
+                    loss_seg = loss_bce + 0.2 * loss_seg_aux
 
                 # Pozdější kroky mají menší váhu — chyba se přirozeně akumuluje
-                step_weight = 0.9 ** step
+                # step_weight = 0.9 ** step
                 
                 loss_latent_l2 = torch.mean(pred["latent_state"] ** 2)
 
-                step_loss = step_weight * (
+                # step_loss = step_weight * (
+                #     3.0 * loss_physics +
+                #     2.0 * loss_visual  +
+                #     12.0 * loss_seg +
+                #     0.01 * loss_latent_l2 # Udržuje hodnoty blízko nule
+                # )
+                step_loss = (
                     3.0 * loss_physics +
                     2.0 * loss_visual  +
                     12.0 * loss_seg +
                     0.01 * loss_latent_l2 # Udržuje hodnoty blízko nule
                 )
+
                 loss_accum = loss_accum + step_loss / rollout_steps
 
                 # --- Autoregresivní update stavu ---
@@ -406,9 +560,6 @@ def save_checkpoints(
             "compressor_state_dict": unwrapped_compressor.state_dict(),
         }
         
-        # Volitelně můžeš přidat i stav optimizeru, pokud bys chtěl umět navázat v trénování:
-        # "optimizer_state_dict": optimizer.state_dict()
-        
         save_path = os.path.join(save_dir, f"checkpoint_{phase}.pt")
         
         # Samotné uložení
@@ -449,18 +600,48 @@ def load_transformer_checkpoints(
 
     print(f"✅ Váhy úspěšně načteny.")
 
+def set_lr(optimizer, lr):
+    for pg in optimizer.param_groups:
+        pg['lr'] = lr
+        
+def train(transformer, decoder, compressor, dataloader, 
+                     dataloader_long, optimizer, accelerator):
+    
+    # Fáze 1: Teacher forcing, žádná autoregrese
+    train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=80, detach=True)
+    train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=15, detach=True, complex_loss=True)
+    
+    # Fáze 2: Krátké rollouty s detach — stabilizace
+    for steps in [2, 3, 5, 8, 12]:
+        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=10, detach=True)
+        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=3, detach=True, complex_loss=True)
+
+    # Fáze 3: Střední rollouty
+    set_lr(optimizer, 5e-5)
+    for steps in [15, 20, 30]:
+        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=20, detach=False)
+        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=3, detach=False, complex_loss=True)
+    
+    # Fáze 4: Dlouhé rollouty pouze na dlouhém datasetu
+    set_lr(optimizer, 1e-5)
+    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=50,  num_epochs=30, detach=False)
+    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=50,  num_epochs=3, detach=False, complex_loss=True)
+    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=100, num_epochs=30, detach=False)
+    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=100, num_epochs=3, detach=False, complex_loss=True)
+
 if __name__ == "__main__":
     model = GameStateTransformer()
     decoder = SegmentationDecoder()
     compressor = LatentCompressor()
-    load_transformer_checkpoints(
-        "checkpoints_transformer/checkpoint_rollout.pt",
-        model,
-        decoder,
-        compressor,
-        accelerator=None,
-        device="cpu"
-    )
+    
+    # load_transformer_checkpoints(
+    #     "checkpoints_transformer/checkpoint_rollout.pt",
+    #     model,
+    #     decoder,
+    #     compressor,
+    #     accelerator=None,
+    #     device="cpu"
+    # )
     
     data_loader = get_rollout_dataloader(
         root_dir="../data-generation/super-mario-bros/collected_data",
@@ -471,45 +652,30 @@ if __name__ == "__main__":
         image_size=256,
         num_actions=4,
         num_frames=4,
-        rollout_steps=10,
-        stride=10,
-        max_episodes=200
+        rollout_steps=30,
+        stride=30,
+        max_episodes=400
     )
-    data_loader_bigger = get_rollout_dataloader(
+    dataloader_long = get_rollout_dataloader(
         root_dir="../data-generation/super-mario-bros/collected_data",
         seg_dir="mario_data_seg",
-        batch_size=64,
+        batch_size=16,
         shuffle=True,
         num_workers=4,
         image_size=256,
         num_actions=4,
         num_frames=4,
-        rollout_steps=30,
-        stride=30,
-        max_episodes=200
+        rollout_steps=100,
+        stride=100,
+        max_episodes=400
     )
     optimizer = torch.optim.AdamW(
         list(model.parameters()) + list(decoder.parameters()) + list(compressor.parameters()),
-        lr=1e-5
+        lr=1e-4
     )
     accelerator = Accelerator(mixed_precision="bf16")
     
-    model, decoder, compressor, optimizer, data_loader, data_loader_bigger = accelerator.prepare(model, decoder, compressor, optimizer, data_loader, data_loader_bigger)
+    model, decoder, compressor, optimizer, data_loader, dataloader_long = accelerator.prepare(model, decoder, compressor, optimizer, data_loader, dataloader_long)
     
-    # train_rollout(model, decoder, compressor, data_loader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=70)
+    train(model, decoder, compressor, dataloader=data_loader, dataloader_long=dataloader_long, optimizer=optimizer, accelerator=accelerator)
     
-    # for param_group in optimizer.param_groups:
-    #     param_group['lr'] = 5e-4
-        
-    train_rollout(model, decoder, compressor, data_loader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=40)
-    
-    train_rollout(model, decoder, compressor, data_loader, optimizer, accelerator=accelerator, rollout_steps=5, seq_len=4, num_epochs=20)
-    
-    train_rollout(model, decoder, compressor, data_loader, optimizer, accelerator=accelerator, rollout_steps=10, seq_len=4, num_epochs=20)
-    
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = 5e-5
-    
-    train_rollout(model, decoder, compressor, data_loader_bigger, optimizer, accelerator=accelerator, rollout_steps=20, seq_len=4, num_epochs=20)
-    
-    train_rollout(model, decoder, compressor, data_loader_bigger, optimizer, accelerator=accelerator, rollout_steps=30, seq_len=4, num_epochs=20)
