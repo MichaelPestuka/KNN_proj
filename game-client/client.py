@@ -92,25 +92,40 @@ def build_ssh_command(args: argparse.Namespace) -> list[str]:
 
 
 def action_from_keys(held: set[str]) -> int:
-    """Map keyboard state to SIMPLE_MOVEMENT index (0..6)."""
+    """Map keyboard state to COMPLEX_MOVEMENT index (0..11).
+
+    Arrow keys = directions, Space = A button (jump), Ctrl = B button (run).
+    """
     left = "Left" in held
     right = "Right" in held
-    z = "z" in held or "Z" in held
-    x = "x" in held or "X" in held
+    down = "Down" in held
+    up = "Up" in held
+    z = "space" in held or "Space" in held
+    x = "Control_L" in held or "Control_R" in held or "Control" in held
 
     if right and z and x:
-        return 4
+        return 4   # right + A + B
     if right and z:
-        return 2
+        return 2   # right + A
     if right and x:
-        return 3
+        return 3   # right + B
     if right:
-        return 1
+        return 1   # right
+    if left and z and x:
+        return 9   # left + A + B
+    if left and z:
+        return 7   # left + A
+    if left and x:
+        return 8   # left + B
     if left:
-        return 6
+        return 6   # left
+    if down:
+        return 10  # down
+    if up:
+        return 11  # up
     if z:
-        return 5
-    return 0
+        return 5   # A
+    return 0       # NOOP
 
 
 class GameClientApp:
@@ -184,7 +199,10 @@ class GameClientApp:
         a = action_from_keys(self._held)
         with self._action_lock:
             self._current_action = a
-        labels = ("NOOP", "right", "right+A", "right+B", "right+A+B", "A", "left")
+        labels = (
+            "NOOP", "right", "right+A", "right+B", "right+A+B",
+            "A", "left", "left+A", "left+B", "left+A+B", "down", "up",
+        )
         self.action_var.set(f"action: {labels[a]} ({a})")
 
     def _stderr_reader(self, proc: subprocess.Popen) -> None:
