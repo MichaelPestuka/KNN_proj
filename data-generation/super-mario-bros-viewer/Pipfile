@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 pillow = "*"
 numpy = "*"
+matplotlib = "*"
 
 [requires]
 python_version = "3.12"
