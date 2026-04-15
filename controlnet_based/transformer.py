@@ -110,44 +110,66 @@ class LatentCompressor(nn.Module):
         x = self.encoder(z)           # [B, 32, 8, 8]
         return self.proj(x.flatten(1))  # [B, latent_dim]
         
+# class SegmentationDecoder(nn.Module):
+#     def __init__(self, visual_embed_dim=124, latent_state_dim=64, num_classes=8):
+#         super().__init__()
+#         in_dim = visual_embed_dim + latent_state_dim
+#         self.pre = nn.Linear(in_dim, 64 * 8 * 8)  # více kanálů na startu
+
+#         def up_block(in_ch, out_ch):
+#             return nn.Sequential(
+#                 nn.ConvTranspose2d(in_ch, out_ch, 4, stride=2, padding=1),
+#                 nn.GroupNorm(8, out_ch),   # GroupNorm > BatchNorm pro malé batch
+#                 nn.GELU(),
+#                 # Residual refinement po upsample
+#                 nn.Conv2d(out_ch, out_ch, 3, padding=1),
+#                 nn.GroupNorm(8, out_ch),
+#                 nn.GELU(),
+#             )
+
+#         self.up1 = up_block(64, 64)   # 8→16
+#         self.up2 = up_block(64, 32)   # 16→32
+#         self.up3 = up_block(32, 32)   # 32→64
+#         self.up4 = up_block(32, 16)   # 64→128
+
+#         # Auxiliary head ze 32×32 — intermediate supervision
+#         self.aux_head = nn.Conv2d(32, num_classes, 1)
+#         # Hlavní výstup
+#         self.final    = nn.Conv2d(16, num_classes, 1)
+
+    # def forward(self, pred: dict):
+    #     z = torch.cat([pred["visual"], pred["latent_state"]], dim=-1)
+    #     x = self.pre(z).view(-1, 64, 8, 8)
+
+    #     x = self.up1(x)   # [B, 64, 16, 16]
+    #     x = self.up2(x)   # [B, 32, 32, 32]
+    #     aux = self.aux_head(x)   # [B, C, 32, 32] — auxiliary output
+    #     x = self.up3(x)   # [B, 32, 64, 64]
+    #     x = self.up4(x)   # [B, 16, 128, 128]
+
+    #     return self.final(x), aux  # vrátí tuple
+    
 class SegmentationDecoder(nn.Module):
     def __init__(self, visual_embed_dim=124, latent_state_dim=64, num_classes=8):
         super().__init__()
         in_dim = visual_embed_dim + latent_state_dim
-        self.pre = nn.Linear(in_dim, 64 * 8 * 8)  # více kanálů na startu
-
-        def up_block(in_ch, out_ch):
-            return nn.Sequential(
-                nn.ConvTranspose2d(in_ch, out_ch, 4, stride=2, padding=1),
-                nn.GroupNorm(8, out_ch),   # GroupNorm > BatchNorm pro malé batch
-                nn.GELU(),
-                # Residual refinement po upsample
-                nn.Conv2d(out_ch, out_ch, 3, padding=1),
-                nn.GroupNorm(8, out_ch),
-                nn.GELU(),
-            )
-
-        self.up1 = up_block(64, 64)   # 8→16
-        self.up2 = up_block(64, 32)   # 16→32
-        self.up3 = up_block(32, 32)   # 32→64
-        self.up4 = up_block(32, 16)   # 64→128
-
-        # Auxiliary head ze 32×32 — intermediate supervision
-        self.aux_head = nn.Conv2d(32, num_classes, 1)
-        # Hlavní výstup
-        self.final    = nn.Conv2d(16, num_classes, 1)
+        self.pre = nn.Linear(in_dim, 32 * 8 * 8)
+        self.net = nn.Sequential(
+            nn.ConvTranspose2d(32, 32, 4, stride=2, padding=1),  # 16×16
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 32, 4, stride=2, padding=1),  # 32×32
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1),  # 64×64
+            nn.ReLU(),
+            nn.ConvTranspose2d(16, 16, 4, stride=2, padding=1),  # 128×128
+            nn.ReLU(),
+            nn.Conv2d(16, num_classes, 1),                       # [B, num_classes, 128, 128]
+        )
 
     def forward(self, pred: dict):
         z = torch.cat([pred["visual"], pred["latent_state"]], dim=-1)
-        x = self.pre(z).view(-1, 64, 8, 8)
-
-        x = self.up1(x)   # [B, 64, 16, 16]
-        x = self.up2(x)   # [B, 32, 32, 32]
-        aux = self.aux_head(x)   # [B, C, 32, 32] — auxiliary output
-        x = self.up3(x)   # [B, 32, 64, 64]
-        x = self.up4(x)   # [B, 16, 128, 128]
-
-        return self.final(x), aux  # vrátí tuple
+        x = self.pre(z).view(-1, 32, 8, 8)
+        return self.net(x)
     
 def boundary_loss(pred_logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """
@@ -423,8 +445,9 @@ def train_rollout(
                 actions = batch["all_actions"][:, step:step + seq_len].to(device)
 
                 pred     = transformer(states, actions)
-                pred_seg, pred_seg_aux = decoder(pred)
-
+                # pred_seg, pred_seg_aux = decoder(pred)
+                pred_seg = decoder(pred)
+                
                 # Mario kanál z predikované fyziky
                 # pred_cx = pred["physics"][:, 4]
                 # pred_cy = pred["physics"][:, 5]
@@ -453,8 +476,8 @@ def train_rollout(
                 # loss_dice     = dice_loss(pred_seg, target_seg)
                 # loss_boundary = boundary_loss(pred_seg, target_seg)
 
-                raw_bce_aux = F.binary_cross_entropy_with_logits(pred_seg_aux, target_seg_aux, reduction='none')
-                loss_seg_aux = (raw_bce_aux * class_weights).mean() + dice_loss(pred_seg_aux, target_seg_aux)
+                # raw_bce_aux = F.binary_cross_entropy_with_logits(pred_seg_aux, target_seg_aux, reduction='none')
+                # loss_seg_aux = (raw_bce_aux * class_weights).mean() + dice_loss(pred_seg_aux, target_seg_aux)
 
                 if complex_loss:
                     loss_bce, loss_dice = mario_gated_seg_loss(
@@ -462,11 +485,11 @@ def train_rollout(
                     )
                     loss_boundary = boundary_loss(pred_seg, target_seg)
 
-                    loss_seg = loss_bce + 2.0 * loss_dice + 1.0 * loss_boundary + 0.5 * loss_seg_aux
+                    loss_seg = loss_bce + 2.0 * loss_dice + 1.0 * loss_boundary # + 0.5 * loss_seg_aux
                 else:
                     raw_bce  = F.binary_cross_entropy_with_logits(pred_seg, target_seg, reduction='none')
                     loss_bce = (raw_bce * class_weights).mean()
-                    loss_seg = loss_bce + 0.2 * loss_seg_aux
+                    loss_seg = loss_bce # + 0.2 * loss_seg_aux
 
                 # Pozdější kroky mají menší váhu — chyba se přirozeně akumuluje
                 # step_weight = 0.9 ** step
@@ -566,7 +589,6 @@ def save_checkpoints(
         torch.save(checkpoint, save_path)
         print(f"✅ Checkpoint úspěšně uložen do: {save_path}")
         
-
 def load_transformer_checkpoints(
     checkpoint_path,
     transformer,
@@ -608,40 +630,43 @@ def train(transformer, decoder, compressor, dataloader,
                      dataloader_long, optimizer, accelerator):
     
     # Fáze 1: Teacher forcing, žádná autoregrese
-    train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=80, detach=True)
-    train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=15, detach=True, complex_loss=True)
+    # train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=130, detach=True)
+    train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=1, seq_len=4, num_epochs=30, detach=False, complex_loss=True)
     
     # Fáze 2: Krátké rollouty s detach — stabilizace
     for steps in [2, 3, 5, 8, 12]:
-        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=10, detach=True)
-        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=3, detach=True, complex_loss=True)
+        # train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=10, detach=True)
+
+        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=10, detach=False, complex_loss=True)
 
     # Fáze 3: Střední rollouty
     set_lr(optimizer, 5e-5)
     for steps in [15, 20, 30]:
-        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=20, detach=False)
-        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=3, detach=False, complex_loss=True)
+        # train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=15, detach=False)
+    
+        train_rollout(transformer, decoder, compressor, dataloader, optimizer, accelerator=accelerator, rollout_steps=steps, num_epochs=15, detach=False, complex_loss=True)
     
     # Fáze 4: Dlouhé rollouty pouze na dlouhém datasetu
     set_lr(optimizer, 1e-5)
-    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=50,  num_epochs=30, detach=False)
-    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=50,  num_epochs=3, detach=False, complex_loss=True)
-    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=100, num_epochs=30, detach=False)
-    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=100, num_epochs=3, detach=False, complex_loss=True)
+    # train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=50,  num_epochs=30, detach=False)
+    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=50,  num_epochs=15, detach=False, complex_loss=True)
+    # train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=100, num_epochs=30, detach=False)
+    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=100, num_epochs=15, detach=False, complex_loss=True)
+    train_rollout(transformer, decoder, compressor, dataloader_long, optimizer, accelerator=accelerator, rollout_steps=200, num_epochs=15, detach=False, complex_loss=True)
 
 if __name__ == "__main__":
     model = GameStateTransformer()
     decoder = SegmentationDecoder()
     compressor = LatentCompressor()
     
-    # load_transformer_checkpoints(
-    #     "checkpoints_transformer/checkpoint_rollout.pt",
-    #     model,
-    #     decoder,
-    #     compressor,
-    #     accelerator=None,
-    #     device="cpu"
-    # )
+    load_transformer_checkpoints(
+        "checkpoints_transformer/checkpoint_rollout.pt",
+        model,
+        decoder,
+        compressor,
+        accelerator=None,
+        device="cpu"
+    )
     
     data_loader = get_rollout_dataloader(
         root_dir="../data-generation/super-mario-bros/collected_data",
@@ -659,14 +684,14 @@ if __name__ == "__main__":
     dataloader_long = get_rollout_dataloader(
         root_dir="../data-generation/super-mario-bros/collected_data",
         seg_dir="mario_data_seg",
-        batch_size=16,
+        batch_size=8,
         shuffle=True,
         num_workers=4,
         image_size=256,
         num_actions=4,
         num_frames=4,
-        rollout_steps=100,
-        stride=100,
+        rollout_steps=200,
+        stride=200,
         max_episodes=400
     )
     optimizer = torch.optim.AdamW(

@@ -184,7 +184,7 @@ class DiffusionPipeline:
 
         with torch.inference_mode():
             pred     = self.transformer(states, actions)
-            pred_seg = self.decoder(pred)[0]               # [1, 6, 128, 128]
+            pred_seg = self.decoder(pred)               # [1, 6, 128, 128]
 
             # Mario kanál z predikované fyziky
             # pred_cx = pred["physics"][:, 4]
@@ -199,7 +199,6 @@ class DiffusionPipeline:
 
         import torchvision
         torchvision.utils.save_image(control_512, "debug_control_image.png")
-
 
         # start = time.time()
         with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=model_dtype):
@@ -456,7 +455,7 @@ class Trainer:
 
             # Transformer → seg mapa → RGB control
             pred     = self.transformer(states, actions)
-            pred_seg = self.decoder(pred)[0]
+            pred_seg = self.decoder(pred)
             # pred_seg[:, 2:3] = (
             #     create_mario_map(torch.clamp(pred["physics"][:, 4], 0.0, 1.0), torch.clamp(pred["physics"][:, 5], 0.0, 1.0), size=128)
             #     * 20.0 - 10.0
@@ -523,7 +522,8 @@ class Trainer:
 
             with self.accelerator.autocast():
                 pred     = self.transformer(states, actions)
-                pred_seg = self.decoder(pred)[0]
+                pred_seg = self.decoder(pred)
+                
                 # pred_seg[:, 2:3] = (
                 #     create_mario_map(torch.clamp(pred["physics"][:, 4], 0.0, 1.0), torch.clamp(pred["physics"][:, 5], 0.0, 1.0), size=128)
                 #     * 20.0 - 10.0
@@ -648,7 +648,7 @@ def generate_video(
     num_frames=200,
     image_size=256,
     fps=30,
-    num_inference_steps=20
+    num_inference_steps=10
 ):
     json_file = [f for f in os.listdir(episode_path) if f.endswith(".json")][0]
     with open(os.path.join(episode_path, json_file), 'r') as f:
@@ -816,8 +816,8 @@ if __name__ == "__main__":
         image_size=256,
         num_actions=seq_len,
         num_frames=seq_len,
-        rollout_steps=10,
-        stride=10,
+        rollout_steps=4,
+        stride=4,
         max_episodes=400
     )
     
@@ -851,11 +851,11 @@ if __name__ == "__main__":
 
     trainer = Trainer(pipeline, dataloader=None, rollout_dataloader=data_loader_rollout, accelerator=accelerator, lr=1e-4)
         
-    trainer.train(epochs=4, save_dir="./checkpoints", phase="gt_pretrain", save_every=5, video_every=2)
+    trainer.train(epochs=4, save_dir="./checkpoints", phase="gt_pretrain", save_every=2, video_every=1)
     
-    trainer.train(epochs=4, save_dir="./checkpoints_controlnet", phase="standard", save_every=2, video_every=1)
+    trainer.train(epochs=6, save_dir="./checkpoints_controlnet", phase="standard", save_every=2, video_every=1)
     
-    trainer.train(epochs=6, save_dir="./checkpoints_controlnet_rollout", phase="rollout", save_every=2, video_every=1, rollout_steps=10)
+    # trainer.train(epochs=1, save_dir="./checkpoints_controlnet_rollout", phase="rollout", save_every=2, video_every=1, rollout_steps=20)
         
     # trainer.unfreeze_transformer(lr=1e-5)
     # trainer.unfreeze_unet(lr=1e-6)
