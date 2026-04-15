@@ -3,13 +3,15 @@
 Local Tkinter client: SSH to remote GPU host, stream actions, display JPEG frames.
 
 Example:
-  pipenv run python client.py --ssh-target user@gpu-server
+  pipenv run python client.py --mode gamengen
+  pipenv run python client.py --mode controlnet
 """
 
 from __future__ import annotations
 
 import argparse
 import io
+import posixpath
 import queue
 import shlex
 import struct
@@ -27,34 +29,59 @@ except ImportError as exc:  # pragma: no cover
 from PIL import Image, ImageTk
 
 try:
-    _RESAMPLE = Image.Resampling.NEAREST
+    _RESAMPLE_NEAREST = Image.Resampling.NEAREST
+    _RESAMPLE_SMOOTH = Image.Resampling.LANCZOS
 except AttributeError:
-    _RESAMPLE = Image.NEAREST  # type: ignore[attr-defined]
+    _RESAMPLE_NEAREST = Image.NEAREST  # type: ignore[attr-defined]
+    _RESAMPLE_SMOOTH = Image.LANCZOS  # type: ignore[attr-defined]
 
-SCALE = 3
 READY_SUBSTRING = "READY"
 
-# Default remote layout (expanded on the remote shell)
-DEFAULT_REMOTE_DIR = "/home/vpsuser/KNN_proj/remote-server-gamengen"
-DEFAULT_MODEL_FOLDER = "/home/vpsuser/KNN/gameNgen-repro/sd-full-dataset-180k-steps"
+DEFAULT_SSH_TARGET = "vpsuser@pro6000b.foukec.cz"
+
+# Filled after --mode if --remote-dir / --model-folder omitted
+MODE_DEFAULTS: dict[str, dict[str, str]] = {
+    "gamengen": {
+        "remote_dir": "/home/vpsuser/KNN_proj/remote-server-gamengen",
+        "model_folder": "/mnt/pro6000/data/gameNgen-checkpoints/sd-full-dataset-250k-steps",
+    },
+    "controlnet": {
+        "remote_dir": "/home/vpsuser/KNN_proj/remote-server-controlnet",
+        "model_folder": "/home/vpsuser/KNN_proj/controlnet_based/inference_checkpoints",
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="GameNGen client over SSH (Tkinter + stdin/stdout protocol)")
+    p = argparse.ArgumentParser(
+        description="Game client over SSH (Tkinter + stdin/stdout protocol; GameNGen or ControlNet)"
+    )
     p.add_argument(
         "--ssh-target",
+        default=DEFAULT_SSH_TARGET,
+        help=f"SSH destination (default: {DEFAULT_SSH_TARGET})",
+    )
+    p.add_argument(
+        "--mode",
         required=True,
-        help="SSH destination (e.g. user@host or Host from ~/.ssh/config)",
+        choices=["gamengen", "controlnet"],
+        help="Remote server: GameNGen UNet loop or ControlNet-based loop",
     )
     p.add_argument(
         "--remote-dir",
-        default=DEFAULT_REMOTE_DIR,
-        help=f"Remote path to remote-server-gamengen (default: {DEFAULT_REMOTE_DIR})",
+        default=None,
+        help="Remote cwd for pipenv/inference_loop.py (default depends on --mode)",
     )
     p.add_argument(
         "--model-folder",
-        default=DEFAULT_MODEL_FOLDER,
-        help=f"Remote path to model weights (default: {DEFAULT_MODEL_FOLDER})",
+        default=None,
+        help="Remote model folder (default depends on --mode)",
+    )
+    p.add_argument(
+        "--initial-image",
+        default=None,
+        dest="initial_image",
+        help="ControlNet only: remote path to initial frame (default: ../remote-server-gamengen/sample_images/start.jpg from --remote-dir)",
     )
     p.add_argument(
         "--jpeg-quality",
@@ -63,11 +90,37 @@ def parse_args() -> argparse.Namespace:
         help="Forwarded to inference_loop.py on the remote (default: 85)",
     )
     p.add_argument(
+        "--scale",
+        type=float,
+        default=None,
+        help="Display scale vs native frame size (default: 2 for gamengen 320x240, 1 for controlnet 512x512)",
+    )
+    p.add_argument(
         "--ssh-opts",
         default="",
         help='Extra ssh CLI flags as one string, e.g. \'-p 2222 -i ~/.ssh/key\'',
     )
     return p.parse_args()
+
+
+def apply_mode_defaults(args: argparse.Namespace) -> None:
+    defaults = MODE_DEFAULTS[args.mode]
+    if args.remote_dir is None:
+        args.remote_dir = defaults["remote_dir"]
+    if args.model_folder is None:
+        args.model_folder = defaults["model_folder"]
+    if args.mode == "controlnet" and args.initial_image is None:
+        args.initial_image = posixpath.normpath(
+            posixpath.join(
+                args.remote_dir,
+                "..",
+                "remote-server-gamengen",
+                "sample_images",
+                "start.jpg",
+            )
+        )
+    if args.scale is None:
+        args.scale = 1.0 if args.mode == "controlnet" else 2.0
 
 
 def read_exact(stream: io.BufferedReader, n: int) -> bytes:
@@ -81,12 +134,22 @@ def read_exact(stream: io.BufferedReader, n: int) -> bytes:
 
 
 def build_ssh_command(args: argparse.Namespace) -> list[str]:
-    remote_inner = (
-        f"cd {shlex.quote(args.remote_dir)} && "
-        f"exec pipenv run python inference_loop.py "
-        f"--model_folder {shlex.quote(args.model_folder)} "
-        f"--jpeg-quality {int(args.jpeg_quality)}"
-    )
+    if args.mode == "gamengen":
+        remote_inner = (
+            f"cd {shlex.quote(args.remote_dir)} && "
+            f"exec pipenv run python inference_loop.py "
+            f"--model_folder {shlex.quote(args.model_folder)} "
+            f"--jpeg-quality {int(args.jpeg_quality)}"
+        )
+    else:
+        assert args.initial_image is not None
+        remote_inner = (
+            f"cd {shlex.quote(args.remote_dir)} && "
+            f"exec pipenv run python inference_loop.py "
+            f"--model_folder {shlex.quote(args.model_folder)} "
+            f"--initial-image {shlex.quote(args.initial_image)} "
+            f"--jpeg-quality {int(args.jpeg_quality)}"
+        )
     extra = shlex.split(args.ssh_opts.strip()) if args.ssh_opts.strip() else []
     return ["ssh", "-T", *extra, args.ssh_target, remote_inner]
 
@@ -131,12 +194,13 @@ def action_from_keys(held: set[str]) -> int:
 class GameClientApp:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
+        self._display_scale = float(args.scale)
         self._held: set[str] = set()
         self._action_lock = threading.Lock()
         self._current_action = 0
         self._proc: subprocess.Popen | None = None
         self._frame_queue: queue.Queue[tuple[Image.Image, float] | Exception | None] = queue.Queue(
-            maxsize=2
+            maxsize=8
         )
         self._ready = threading.Event()
         self._stop = threading.Event()
@@ -145,7 +209,8 @@ class GameClientApp:
         self._stderr_thread: threading.Thread | None = None
 
         self.root = tk.Tk()
-        self.root.title("GameNGen (SSH)")
+        title = "ControlNet (SSH)" if args.mode == "controlnet" else "GameNGen (SSH)"
+        self.root.title(title)
         self.status_var = tk.StringVar(value="Connecting…")
         self.action_var = tk.StringVar(value="action: NOOP (0)")
         self.fps_var = tk.StringVar(value="fps: —")
@@ -153,6 +218,7 @@ class GameClientApp:
         self._photo: ImageTk.PhotoImage | None = None
         self._last_frame_time: float | None = None
         self._fps_ema: float | None = None
+        self._canvas_size: tuple[int, int] | None = None
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -167,10 +233,17 @@ class GameClientApp:
         tk.Label(top, textvariable=self.status_var, anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Label(top, textvariable=self.fps_var, width=18, anchor="e").pack(side=tk.RIGHT)
 
+        if self.args.mode == "controlnet":
+            init_w = int(512 * self._display_scale)
+            init_h = int(512 * self._display_scale)
+        else:
+            init_w = int(320 * self._display_scale)
+            init_h = int(240 * self._display_scale)
+
         self.canvas = tk.Canvas(
             self.root,
-            width=320 * SCALE,
-            height=240 * SCALE,
+            width=max(1, init_w),
+            height=max(1, init_h),
             highlightthickness=1,
             highlightbackground="#333",
             bg="#111",
@@ -260,10 +333,11 @@ class GameClientApp:
                 try:
                     self._frame_queue.put((img, now), timeout=1.0)
                 except queue.Full:
-                    try:
-                        self._frame_queue.get_nowait()
-                    except queue.Empty:
-                        pass
+                    while True:
+                        try:
+                            self._frame_queue.get_nowait()
+                        except queue.Empty:
+                            break
                     self._frame_queue.put((img, now))
         except Exception as e:
             if not self._stop.is_set():
@@ -294,13 +368,16 @@ class GameClientApp:
         self._poll_frames()
 
     def _poll_frames(self) -> None:
-        try:
-            item = self._frame_queue.get_nowait()
-        except queue.Empty:
-            self.root.after(16, self._poll_frames)
-            return
+        item: tuple[Image.Image, float] | Exception | None = None
+        while True:
+            try:
+                nxt = self._frame_queue.get_nowait()
+            except queue.Empty:
+                break
+            item = nxt
 
         if item is None:
+            self.root.after(8, self._poll_frames)
             return
         if isinstance(item, Exception):
             self.status_var.set(f"Error: {item!s}")
@@ -316,12 +393,18 @@ class GameClientApp:
         self._last_frame_time = t
 
         w, h = img.size
-        scaled = img.resize((w * SCALE, h * SCALE), _RESAMPLE)
+        dw = max(1, int(round(w * self._display_scale)))
+        dh = max(1, int(round(h * self._display_scale)))
+        resample = _RESAMPLE_SMOOTH if self.args.mode == "controlnet" else _RESAMPLE_NEAREST
+        scaled = img.resize((dw, dh), resample)
         self._photo = ImageTk.PhotoImage(scaled)
+        if (dw, dh) != self._canvas_size:
+            self.canvas.config(width=dw, height=dh)
+            self._canvas_size = (dw, dh)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self._photo)
 
-        self.root.after(16, self._poll_frames)
+        self.root.after(8, self._poll_frames)
 
     def _on_close(self) -> None:
         self._stop.set()
@@ -339,6 +422,7 @@ class GameClientApp:
 
 def main() -> int:
     args = parse_args()
+    apply_mode_defaults(args)
     app = GameClientApp(args)
     app.run()
     return 0

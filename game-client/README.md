@@ -1,6 +1,8 @@
-# GameNGen SSH client
+# Game SSH client
 
 Tkinter UI + keyboard controls; launches `inference_loop.py` on the GPU host over `ssh -T`.
+
+Supports **GameNGen** (`--mode gamengen`) or **ControlNet** (`--mode controlnet`); `--mode` is required.
 
 ## Setup
 
@@ -12,20 +14,29 @@ Omit `--deploy` if you are refreshing the lock after editing `Pipfile`.
 
 ## Run
 
-Only `--ssh-target` is required (defaults match the usual remote layout):
+Defaults include SSH target, remote directory, and model folder (per mode). Minimal:
 
 ```bash
-pipenv run python client.py --ssh-target user@gpu-server
+pipenv run python client.py --mode gamengen
 ```
 
-Equivalent to:
+**GameNGen** (explicit paths):
 
 ```bash
 pipenv run python client.py \
-  --ssh-target user@gpu-server \
-  --remote-dir /home/knn/KNN_proj/remote-server-gamengen \
-  --model-folder ~/gamengenmario/good-prototype
+  --mode gamengen \
+  --ssh-target vpsuser@pro6000b.foukec.cz \
+  --remote-dir /home/vpsuser/KNN_proj/remote-server-gamengen \
+  --model-folder /mnt/pro6000/data/gameNgen-checkpoints/sd-full-dataset-250k-steps
 ```
+
+**ControlNet** (remote `remote-server-controlnet/` + checkpoints under `controlnet_based/inference_checkpoints/`):
+
+```bash
+pipenv run python client.py --mode controlnet
+```
+
+Optional: `--initial-image` (remote path); if omitted, defaults to `../remote-server-gamengen/sample_images/start.jpg` relative to `--remote-dir`.
 
 Use `--ssh-opts` for extra flags, e.g. `--ssh-opts '-p 2222'`.
 
