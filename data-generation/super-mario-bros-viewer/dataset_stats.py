@@ -33,6 +33,7 @@ def main():
     total_frames = 0
     noop_frames = 0
     left_frames = 0
+    down_frames = 0
     runs_processed = 0
 
     for entry in sorted(os.listdir(data_dir)):
@@ -50,6 +51,8 @@ def main():
                 noop_frames += 1
             elif "left" in action:
                 left_frames += 1
+            elif "down" in action:
+                down_frames += 1
 
         runs_processed += 1
 
@@ -59,11 +62,13 @@ def main():
 
     noop_pct = noop_frames / total_frames * 100
     left_pct = left_frames / total_frames * 100
+    down_pct = down_frames / total_frames * 100
 
     print(f"Runs processed:      {runs_processed}")
     print(f"Total frames:        {total_frames}")
     print(f"NOOP frames:         {noop_frames} ({noop_pct:.2f}%)")
     print(f"Left frames:         {left_frames} ({left_pct:.2f}%)")
+    print(f"Down frames:         {down_frames} ({down_pct:.2f}%)")
 
 
 if __name__ == "__main__":
