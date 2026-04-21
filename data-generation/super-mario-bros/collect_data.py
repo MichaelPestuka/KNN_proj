@@ -42,10 +42,10 @@ from smb_ram_wrapper import make_ram_env
 AGENTS = ("random", "ppo", "combined", "delayed_random")
 DEFAULT_WORLDS = (1,)
 DEFAULT_STAGES = (1,)
-DEFAULT_MAX_STEPS = 2500
-DEFAULT_RUNS_PER_AGENT = {"random": 0, "ppo": 1, "combined": 100, "delayed_random": 500}
-GAME_OVER_EXTRA_STEPS = 45
-COMBINED_PERIOD_MIN_FRAMES = 5
+DEFAULT_MAX_STEPS = 250
+DEFAULT_RUNS_PER_AGENT = {"random": 0, "ppo": 0, "combined": 100, "delayed_random": 500}
+GAME_OVER_EXTRA_STEPS = 0
+COMBINED_PERIOD_MIN_FRAMES = 20
 COMBINED_PERIOD_MAX_FRAMES = 40
 COMBINED_PPO_PERIOD_PROB = 2.0 / 3.0  # 2:1 PPO vs random stretches
 DELAYED_RANDOM_PPO_MIN_FRAMES = 1
@@ -100,7 +100,7 @@ def save_frame_jpg(path: Path, rgb: np.ndarray) -> None:
 
 
 def make_random_agent(rng: np.random.Generator) -> Callable[[int], int]:
-    """Uniform random discrete action; hold each choice for 2–20 frames."""
+    """Uniform random discrete action; hold each choice for 10–50 frames."""
 
     hold_left = 0
     current = 0
@@ -108,7 +108,7 @@ def make_random_agent(rng: np.random.Generator) -> Callable[[int], int]:
     def act(n_actions: int) -> int:
         nonlocal hold_left, current
         if hold_left <= 0:
-            hold_left = int(rng.integers(2, 21))
+            hold_left = int(rng.integers(10, 51))
             current = int(rng.integers(0, n_actions))
         hold_left -= 1
         return current
@@ -531,14 +531,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "collected_data2",
-        help="Output directory (default: ./collected_data next to this script)",
+        default=Path(__file__).resolve().parent / "collected_data3",
+        help="Output directory (default: ./collected_data3 next to this script)",
     )
     p.add_argument(
         "--workers",
         type=int,
-        default=1,
-        help="Parallel worker processes (default 1)",
+        default=16,
+        help="Parallel worker processes (default 16)",
     )
     p.add_argument(
         "--max-steps",
