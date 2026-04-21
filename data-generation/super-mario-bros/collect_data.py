@@ -52,6 +52,10 @@ DELAYED_RANDOM_PPO_MIN_FRAMES = 1
 DELAYED_RANDOM_PPO_MAX_FRAMES = 1115
 DELAYED_RANDOM_OSCILLATION_FRAMES = 100
 
+# COMPLEX_MOVEMENT indices 10 ('down') and 11 ('up') are excluded from random sampling
+# because they are not useful for Mario gameplay and add noise to the training data.
+EXCLUDED_RANDOM_ACTIONS: frozenset[int] = frozenset({10, 11})
+
 
 def _json_safe_info(info: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
@@ -100,7 +104,7 @@ def save_frame_jpg(path: Path, rgb: np.ndarray) -> None:
 
 
 def make_random_agent(rng: np.random.Generator) -> Callable[[int], int]:
-    """Uniform random discrete action; hold each choice for 10–50 frames."""
+    """Random discrete action (excluding up/down); hold each choice for 10–50 frames."""
 
     hold_left = 0
     current = 0
@@ -109,7 +113,8 @@ def make_random_agent(rng: np.random.Generator) -> Callable[[int], int]:
         nonlocal hold_left, current
         if hold_left <= 0:
             hold_left = int(rng.integers(10, 51))
-            current = int(rng.integers(0, n_actions))
+            valid = [i for i in range(n_actions) if i not in EXCLUDED_RANDOM_ACTIONS]
+            current = int(rng.choice(valid))
         hold_left -= 1
         return current
 
