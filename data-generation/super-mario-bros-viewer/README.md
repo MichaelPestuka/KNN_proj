@@ -81,6 +81,14 @@ If the heatmap is too faint or too saturated, tune:
 `--heatmap-max-alpha`, `--heatmap-percentile`, `--heatmap-gamma`,
 `--heatmap-blur-radius`, and `--heatmap-downsample`.
 
+## Action direction (polar histograms)
+
+`action_direction_polar.py` walks a **dataset root** (a folder of run directories, each with `run.json`), computes per-frame `(dx, dy)` from `info.x_pos` / `info.y_pos`, and plots one polar bar histogram per discrete action. Direction is `atan2(dy, dx)` (SMB RAM `y_pos` increases **upward**, consistent with `plot_visited_points.py` and `--invert-y`). Each subplot title includes the sample count and **average step length** `avg |Δp|` (mean of `sqrt(dx²+dy²)` in RAM units). It picks **SIMPLE** vs **COMPLEX** action naming from the data (`max(action_index) >= 7` → complex). Pairs where `|dx|` or `|dy|` exceed `--max-jump` are skipped and logged to stderr (run folder name and frame pair).
+
+```bash
+pipenv run python action_direction_polar.py ../super-mario-bros/collected_data2 -o action_polar.png
+```
+
 ## Why a separate folder?
 
 The [`super-mario-bros`](../super-mario-bros/) environment is for data collection (gym, `numpy<2`, etc.). The viewer only needs Pillow and a Tk-capable Python. Keeping it here avoids tying collection to GUI/Tk and lets you use Homebrew’s `python-tk` for the viewer venv only.
