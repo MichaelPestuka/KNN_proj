@@ -2,7 +2,7 @@
 """Cartesian (Δx, Δy) heatmap of movement per discrete action over a dataset.
 
 Each subplot shows a 2D histogram of frame-pair displacements for one action.
-Bins are 1-unit wide (matching integer RAM deltas). Color = log(1 + count),
+Bins are 1-unit wide (matching integer RAM deltas). Color = count,
 displayed in greyscale (dark = dense).
 
 Angles use atan2(dy, dx) with raw RAM deltas: in SMB, y_pos increases upward.
@@ -218,7 +218,7 @@ def plot_cartesian_heatmaps(
             np.asarray(dyl, dtype=float),
             bins=[edges, edges],
         )
-        h = np.log1p(h)
+        h = h / len(dxl)  # normalize to fraction of frames for this action
         hist_by_idx[idx] = h
         zmax = max(zmax, float(np.max(h)))
     zmax = max(zmax, 1e-9)
@@ -245,7 +245,7 @@ def plot_cartesian_heatmaps(
 
     sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
-    fig.colorbar(sm, ax=list(axes_flat[:n_actions]), shrink=0.7, pad=0.02, label="log(1 + count)")
+    fig.colorbar(sm, ax=list(axes_flat[:n_actions]), shrink=0.7, pad=0.02, label="fraction of frames")
 
     extra = (
         f", skipped_short={skipped_short} (min_dur={min_duration})" if min_duration > 1 else ""
