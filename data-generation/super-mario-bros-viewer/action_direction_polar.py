@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Polar histograms of (x_pos, y_pos) movement direction per discrete action over a dataset.
+"""Cartesian (Δx, Δy) heatmap of movement per discrete action over a dataset.
 
-Angles use atan2(dy, dx) with raw RAM deltas: in SMB, y_pos increases upward (see
-plot_visited_points.py: default --invert-y maps that to screen Y). This matches the
-map overlay convention; do not negate dy.
+Each subplot shows a 2D histogram of frame-pair displacements for one action.
+Bins are 1-unit wide (matching integer RAM deltas). Color = log(1 + count),
+displayed in greyscale (dark = dense).
+
+Angles use atan2(dy, dx) with raw RAM deltas: in SMB, y_pos increases upward.
 """
 
 from __future__ import annotations
@@ -64,22 +66,37 @@ def _get_xy(frame: dict[str, Any]) -> tuple[float, float] | None:
     return float(x), float(y)
 
 
-def collect_directions_by_action(
+def _trailing_hold_lengths(frames: list[dict[str, Any]]) -> list[int]:
+    """For each frame i, return how long the current action_index has been held."""
+    n = len(frames)
+    hold = [0] * n
+    for i in range(n):
+        act = frames[i].get("action_index")
+        if not isinstance(act, int):
+            continue
+        hold[i] = (hold[i - 1] + 1) if i > 0 and frames[i - 1].get("action_index") == act else 1
+    return hold
+
+
+def collect_deltas_by_action(
     data_dir: Path,
     max_jump: float,
+    min_duration: int,
 ) -> tuple[
     dict[int, list[float]],
     dict[int, list[float]],
     int,
     int,
     int,
+    int,
 ]:
-    """Return (angles_by_action, magnitudes_by_action, runs_used, pairs_used, skipped_jump)."""
-    angles: dict[int, list[float]] = {}
-    magnitudes: dict[int, list[float]] = {}
+    """Return (dx_by_action, dy_by_action, runs_used, pairs_used, skipped_jump, skipped_short)."""
+    dx_by_action: dict[int, list[float]] = {}
+    dy_by_action: dict[int, list[float]] = {}
     runs_used = 0
     pairs_used = 0
     skipped_jump = 0
+    skipped_short = 0
 
     for entry in sorted(data_dir.iterdir()):
         if not entry.is_dir():
@@ -94,6 +111,8 @@ def collect_directions_by_action(
         frames = run.get("frames") or []
         if len(frames) < 2:
             continue
+
+        hold_lens = _trailing_hold_lengths(frames)
 
         run_had_pair = False
         for i in range(len(frames) - 1):
@@ -114,26 +133,28 @@ def collect_directions_by_action(
                 print(
                     f"max-jump skip: run={entry.name} "
                     f"pair index {i}->{i + 1} (frame {fi}->{fj}) "
-                    f"dx={dx:.2f} dy={dy:.2f}",
+                    f"dx={dx:.0f} dy={dy:.0f}",
                     file=sys.stderr,
                 )
                 continue
 
-            theta = math.atan2(dy, dx)
-            step_len = math.hypot(dx, dy)
             act = a.get("action_index")
             if not isinstance(act, int):
                 continue
 
-            angles.setdefault(act, []).append(theta)
-            magnitudes.setdefault(act, []).append(step_len)
+            if min_duration > 1 and hold_lens[i] < min_duration:
+                skipped_short += 1
+                continue
+
+            dx_by_action.setdefault(act, []).append(dx)
+            dy_by_action.setdefault(act, []).append(dy)
             pairs_used += 1
             run_had_pair = True
 
         if run_had_pair:
             runs_used += 1
 
-    return angles, magnitudes, runs_used, pairs_used, skipped_jump
+    return dx_by_action, dy_by_action, runs_used, pairs_used, skipped_jump, skipped_short
 
 
 def _subplot_grid(n: int) -> tuple[int, int]:
@@ -142,65 +163,98 @@ def _subplot_grid(n: int) -> tuple[int, int]:
     return 3, 4
 
 
-def plot_polar_histograms(
+def plot_cartesian_heatmaps(
     movement: list[list[str]],
-    angles_by_action: dict[int, list[float]],
-    magnitudes_by_action: dict[int, list[float]],
-    bins: int,
+    dx_by_action: dict[int, list[float]],
+    dy_by_action: dict[int, list[float]],
     *,
+    max_jump: float,
     map_label: str,
     data_dir: Path,
     runs_used: int,
     pairs_used: int,
     skipped_jump: int,
+    skipped_short: int,
+    min_duration: int,
     output: Path | None,
 ) -> None:
+    """Square 2D histogram of (Δx, Δy) per action; bins are 1-unit wide (integer deltas)."""
     import matplotlib
 
     matplotlib.use("TkAgg" if output is None else "Agg")
     import matplotlib.pyplot as plt
+    from matplotlib import colors as mcolors
 
     n_actions = len(movement)
     nrows, ncols = _subplot_grid(n_actions)
     fig, axes = plt.subplots(
         nrows,
         ncols,
-        subplot_kw={"projection": "polar"},
         figsize=(4 * ncols, 4 * nrows),
+        layout="constrained",
     )
     axes_flat = np.atleast_1d(axes).ravel()
 
-    bin_edges = np.linspace(-math.pi, math.pi, bins + 1)
-    width = 2 * math.pi / bins
+    # Extent: smallest integer L that covers max(|Δx|, |Δy|) across all data, capped by max_jump.
+    all_abs = [
+        abs(v)
+        for lst in list(dx_by_action.values()) + list(dy_by_action.values())
+        for v in lst
+    ]
+    L = int(math.ceil(min(float(np.percentile(all_abs, 99)) if all_abs else max_jump, max_jump)))
+    L = max(L, 1)
+    # Integer-centered bin edges: [-L-0.5, ..., L+0.5], width=1 per bin.
+    edges = np.arange(-L - 0.5, L + 1.5, 1.0)
+
+    zmax = 0.0
+    hist_by_idx: dict[int, np.ndarray] = {}
+    for idx in range(n_actions):
+        dxl = dx_by_action.get(idx, [])
+        dyl = dy_by_action.get(idx, [])
+        if not dxl:
+            continue
+        h, _, _ = np.histogram2d(
+            np.asarray(dxl, dtype=float),
+            np.asarray(dyl, dtype=float),
+            bins=[edges, edges],
+        )
+        h = np.log1p(h)
+        hist_by_idx[idx] = h
+        zmax = max(zmax, float(np.max(h)))
+    zmax = max(zmax, 1e-9)
+    norm = mcolors.Normalize(vmin=0.0, vmax=zmax)
+    cmap = plt.get_cmap("gray_r")  # white = empty, black = dense
+
+    x_grid, y_grid = np.meshgrid(edges, edges, indexing="ij")
 
     for idx in range(n_actions):
         ax = axes_flat[idx]
-        thetas = angles_by_action.get(idx, [])
-        mags = magnitudes_by_action.get(idx, [])
-        n_samples = len(thetas)
-        mean_len = float(np.mean(mags)) if mags else float("nan")
-        if n_samples:
-            counts, _ = np.histogram(thetas, bins=bin_edges)
-            centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-            ax.bar(centers, counts, width=width, bottom=0.0, align="center")
+        n_samples = len(dx_by_action.get(idx, []))
         label = "+".join(movement[idx]) if movement[idx] else "NOOP"
-        len_str = f"{mean_len:.2f}" if mags else "—"
-        ax.set_title(
-            f"{idx}: {label}  (n={n_samples}, avg |Δp|={len_str})",
-            fontsize=9,
-        )
-        ax.set_theta_zero_location("E")
-        ax.set_theta_direction(1)
+        if idx in hist_by_idx:
+            ax.pcolormesh(x_grid, y_grid, hist_by_idx[idx], shading="auto", cmap=cmap, norm=norm)
+        ax.axhline(0.0, color="gray", linewidth=0.5, alpha=0.5)
+        ax.axvline(0.0, color="gray", linewidth=0.5, alpha=0.5)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("Δx")
+        ax.set_ylabel("Δy")
+        ax.set_title(f"{idx}: {label}  (n={n_samples})", fontsize=9)
 
     for j in range(n_actions, len(axes_flat)):
         axes_flat[j].set_visible(False)
 
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    fig.colorbar(sm, ax=list(axes_flat[:n_actions]), shrink=0.7, pad=0.02, label="log(1 + count)")
+
+    extra = (
+        f", skipped_short={skipped_short} (min_dur={min_duration})" if min_duration > 1 else ""
+    )
     fig.suptitle(
-        f"{map_label} — pairs={pairs_used}, runs={runs_used}, "
-        f"skipped_max_jump={skipped_jump}\n{data_dir}",
+        f"{map_label} — Δx×Δy heatmap — pairs={pairs_used}, runs={runs_used}, "
+        f"L={L}, skipped_max_jump={skipped_jump}{extra}\n{data_dir}",
         fontsize=10,
     )
-    fig.tight_layout()
 
     if output:
         fig.savefig(output, dpi=150)
@@ -217,17 +271,21 @@ def main() -> None:
         help="Root folder of the dataset (one subdirectory per run with run.json)",
     )
     p.add_argument(
-        "--bins",
-        type=int,
-        default=36,
-        help="Polar histogram bin count (default: 36)",
-    )
-    p.add_argument(
         "--max-jump",
         type=float,
         default=50.0,
         metavar="PX",
-        help="Drop pairs where |dx| or |dy| exceeds this; log run and frame (default: 50)",
+        help="Drop pairs where |dx| or |dy| exceeds this (default: 50)",
+    )
+    p.add_argument(
+        "--min-duration",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Only count a pair (i, i+1) if the action at frame i has been held "
+            ">= N consecutive frames. Default: 1 = no filter."
+        ),
     )
     p.add_argument(
         "-o",
@@ -238,13 +296,12 @@ def main() -> None:
     )
     args = p.parse_args()
 
-    if args.bins < 1:
-        print("Error: --bins must be >= 1", file=sys.stderr)
-        sys.exit(1)
     if args.max_jump <= 0:
         print("Error: --max-jump must be > 0", file=sys.stderr)
         sys.exit(1)
-
+    if args.min_duration < 1:
+        print("Error: --min-duration must be >= 1", file=sys.stderr)
+        sys.exit(1)
     data_dir = args.dataset.expanduser().resolve()
     if not data_dir.is_dir():
         print(f"Error: dataset directory not found: {data_dir}", file=sys.stderr)
@@ -259,24 +316,31 @@ def main() -> None:
     movement = COMPLEX_MOVEMENT if use_complex else SIMPLE_MOVEMENT
     map_label = "COMPLEX_MOVEMENT" if use_complex else "SIMPLE_MOVEMENT"
 
-    angles_by_action, magnitudes_by_action, runs_used, pairs_used, skipped_jump = (
-        collect_directions_by_action(data_dir, args.max_jump)
-    )
+    (
+        dx_by_action,
+        dy_by_action,
+        runs_used,
+        pairs_used,
+        skipped_jump,
+        skipped_short,
+    ) = collect_deltas_by_action(data_dir, args.max_jump, args.min_duration)
 
     if pairs_used == 0:
         print("No valid frame pairs after filtering.", file=sys.stderr)
         sys.exit(1)
 
-    plot_polar_histograms(
+    plot_cartesian_heatmaps(
         movement,
-        angles_by_action,
-        magnitudes_by_action,
-        args.bins,
+        dx_by_action,
+        dy_by_action,
+        max_jump=args.max_jump,
         map_label=map_label,
         data_dir=data_dir,
         runs_used=runs_used,
         pairs_used=pairs_used,
         skipped_jump=skipped_jump,
+        skipped_short=skipped_short,
+        min_duration=args.min_duration,
         output=args.output,
     )
 

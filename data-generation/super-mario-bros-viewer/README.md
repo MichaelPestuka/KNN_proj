@@ -81,13 +81,19 @@ If the heatmap is too faint or too saturated, tune:
 `--heatmap-max-alpha`, `--heatmap-percentile`, `--heatmap-gamma`,
 `--heatmap-blur-radius`, and `--heatmap-downsample`.
 
-## Action direction (polar histograms)
+## Action direction (Δx, Δy heatmap)
 
-`action_direction_polar.py` walks a **dataset root** (a folder of run directories, each with `run.json`), computes per-frame `(dx, dy)` from `info.x_pos` / `info.y_pos`, and plots one polar bar histogram per discrete action. Direction is `atan2(dy, dx)` (SMB RAM `y_pos` increases **upward**, consistent with `plot_visited_points.py` and `--invert-y`). Each subplot title includes the sample count and **average step length** `avg |Δp|` (mean of `sqrt(dx²+dy²)` in RAM units). It picks **SIMPLE** vs **COMPLEX** action naming from the data (`max(action_index) >= 7` → complex). Pairs where `|dx|` or `|dy|` exceed `--max-jump` are skipped and logged to stderr (run folder name and frame pair).
+`action_direction_polar.py` walks a **dataset root** (a folder of run directories, each with `run.json`), computes per-frame `(dx, dy)` from `info.x_pos` / `info.y_pos`, and plots one panel per discrete action.
+
+Each panel is a **square 2D histogram** of `(Δx, Δy)` with the origin at the center. Bins are **1-unit wide** (matching integer RAM deltas). Color is `log(1 + count)`, displayed in **greyscale** (white = empty, black = dense). The shared color scale spans all panels so relative density is comparable across actions.
+
+Direction uses SMB RAM coords: `y_pos` increases **upward**. **SIMPLE** vs **COMPLEX** action naming follows the data (`max(action_index) >= 7` → complex). Pairs where `|dx|` or `|dy|` exceed `--max-jump` are skipped and logged to stderr.
 
 ```bash
-pipenv run python action_direction_polar.py ../super-mario-bros/collected_data2 -o action_polar.png
+pipenv run python action_direction_polar.py ../super-mario-bros/collected_data2 -o action_dxy.png
 ```
+
+Key options: `--max-jump PX` (default 50), `--min-duration N`.
 
 ## Why a separate folder?
 
