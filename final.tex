@@ -110,31 +110,21 @@ Given our reliance on high-power cloud infrastructure for training and inference
 
 For this inference mode on the GameNGen architecture model, only 3 diffusion steps are used. We have also employed a handful of optimizations beyond the latent image buffer used in the base model (see \ref{gamengen}). One of these optimizations is using 16-bit floating-point values instead of the original 32-bit. Even though a latent buffer is used and only the output image needs to be run through the VAE for display, this task was offloaded to a second GPU along with encoding the image into JPEG for transport, keeping the primary GPU running the UNet continuously. This increased FPS by about 12\%. As of the writing of this report, we are achieving around 22,5 FPS on a pair of Nvidia RTX PRO 6000 Blackwell GPUs while only utilizing them to about 50\% and 10\% respectively. This results in the relatively tame power draw of only 300W combined, about half of the TDP of one of these GPUs.
 
-Currently we do not have a remote interactive application of the ControlNet based model.
+An interactive version of our ControlNet based approach is also available.
 
 \section{Evaluation}
 
 While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. One of these is LPIPS (Learned Perceptual Image Patch Similarity) \footnote{\url{https://arxiv.org/abs/1801.03924}}, which is also cited in the GameNGen paper. This metric is also available from a PyPI package from the authors of the paper\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}.
 
-We have employed both PSNR and LPIPS in an evaluation script, but currently our models generate images outside the scope of this kind of evaluation, failing to model primary game mechanics on unseen data.
-
-You can see an example per frame evaluation in figure \ref{fig:basic_eval}. A side by side GIF of the ground truth and generated frames from the best and worst example shown (training example \texttt{0aa9351d} and \texttt{0aaa90ef} respectively) can be viewed at \url{https://github.com/MichaelPestuka/KNN\_proj/tree/be189cbf683eac64d27bfda323cdc9953e7e1646/figures/GIFs}.
+We have employed both PSNR and LPIPS in an evaluation script. We have also relied heavily on the interactive mode during development to better understand model behaviour. The displayed in Figure \ref{fig:real-gameplay-eval} is a capture of real user gameplay inputs, comparing the output of the real game and various model checkpoints TODO. A side by side GIF of the ground truth and generated frames is available at these permalinks to GitHub ... TODO
 
 \begin{figure*}
   \centering
   \includegraphics[width=\textwidth]{figures/batch_eval_first_gen_data_frame_metrics.png}
-  \caption{An evaluation of per-frame metrics on a few runs from the training set. Not reprenstative of generalization performance, but a demonstration of our working evaluation. On unseen data performance graphs just show random noise, for now.}
-  \label{fig:basic_eval}
+  \caption{An evaluation of per-frame metrics on a few runs from the real user gameplay data. TODO PLACEHOLDER}
+  \label{fig:real-gameplay-eval}
 \end{figure*}
 
-We have also relied heavily on the interactive mode during development to better understand model behaviour.
-
-\section{Future work}
-
-Currently we are focusing on re-running our training with the updated dataset. We hope this will mitigate the controllability issues with the GameNGen implementation. After these issues are resolved, we plan to focus on optimizing the model and finding the parameters (diffusion inference steps, context frame count) with the best results.
-
-Further, I would like to explore training a smaller, purpose-built transformer from the ground up to achieve better performance on more reasonable hardware, like a laptop GPU.
-
-While the current implementation of the ControlNet based approach validates the viability of decoupling state prediction from visual rendering, a primary focus of our future work will be experimentation with training strategy and hyperparameter tuning. Specifically, we will explore variations in the autoregressive rollout schedules, adjusting the sequence length and the progressive phase of longer horizons to better mitigate accumulated drift over extended gameplay episodes. On the generative side, experiments will be conducted to find the optimal trade-off between visual fidelity and real-time inference latency by tuning the Stable Diffusion inference parameters. Ultimately, the optimized pipeline will be evaluated using the previously established metrics and integrated into the interactive environment discussed earlier. This crucial final step will allow us to empirically verify the actual playability, responsiveness, and overall robustness of the fully simulated game.
+We hope to present a playable demo at the poster session.
 
 \end{document}
