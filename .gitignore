@@ -548,3 +548,5 @@ TSWLatexianTemp*
 #*Notes.bib
 
 *.lock
+
+data-generation/super-mario-bros/test_data/
