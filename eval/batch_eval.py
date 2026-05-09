@@ -125,6 +125,15 @@ def save_all_runs_overlay_plot(
     ax_lpips.set_xlabel("Frame")
     ax_lpips.set_title("LPIPS vs frame (lower is better)")
     ax_lpips.grid(True, alpha=0.3)
+    ax_lpips.axhline(
+        y=0.2,
+        color="black",
+        linestyle="--",
+        linewidth=1.2,
+        label="GameNGen mean",
+    )
+
+    ax_lpips.legend(loc="upper right", fontsize=8)
 
     handles, leg_labels = ax_psnr.get_legend_handles_labels()
     ncol = min(4, max(1, n))
