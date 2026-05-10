@@ -110,45 +110,6 @@ class LatentCompressor(nn.Module):
         x = self.encoder(z)           # [B, 32, 8, 8]
         return self.proj(x.flatten(1))  # [B, latent_dim]
         
-# class SegmentationDecoder(nn.Module):
-#     def __init__(self, visual_embed_dim=124, latent_state_dim=64, num_classes=8):
-#         super().__init__()
-#         in_dim = visual_embed_dim + latent_state_dim
-#         self.pre = nn.Linear(in_dim, 64 * 8 * 8)  # více kanálů na startu
-
-#         def up_block(in_ch, out_ch):
-#             return nn.Sequential(
-#                 nn.ConvTranspose2d(in_ch, out_ch, 4, stride=2, padding=1),
-#                 nn.GroupNorm(8, out_ch),   # GroupNorm > BatchNorm pro malé batch
-#                 nn.GELU(),
-#                 # Residual refinement po upsample
-#                 nn.Conv2d(out_ch, out_ch, 3, padding=1),
-#                 nn.GroupNorm(8, out_ch),
-#                 nn.GELU(),
-#             )
-
-#         self.up1 = up_block(64, 64)   # 8→16
-#         self.up2 = up_block(64, 32)   # 16→32
-#         self.up3 = up_block(32, 32)   # 32→64
-#         self.up4 = up_block(32, 16)   # 64→128
-
-#         # Auxiliary head ze 32×32 — intermediate supervision
-#         self.aux_head = nn.Conv2d(32, num_classes, 1)
-#         # Hlavní výstup
-#         self.final    = nn.Conv2d(16, num_classes, 1)
-
-    # def forward(self, pred: dict):
-    #     z = torch.cat([pred["visual"], pred["latent_state"]], dim=-1)
-    #     x = self.pre(z).view(-1, 64, 8, 8)
-
-    #     x = self.up1(x)   # [B, 64, 16, 16]
-    #     x = self.up2(x)   # [B, 32, 32, 32]
-    #     aux = self.aux_head(x)   # [B, C, 32, 32] — auxiliary output
-    #     x = self.up3(x)   # [B, 32, 64, 64]
-    #     x = self.up4(x)   # [B, 16, 128, 128]
-
-    #     return self.final(x), aux  # vrátí tuple
-    
 class SegmentationDecoder(nn.Module):
     def __init__(self, visual_embed_dim=124, latent_state_dim=64, num_classes=8):
         super().__init__()
@@ -471,14 +432,6 @@ def train_rollout(
                 loss_physics = F.mse_loss(pred["physics"], target_physics)
                 loss_visual  = F.mse_loss(pred["visual"],  target_visual)
                 
-                # raw_bce  = F.binary_cross_entropy_with_logits(pred_seg, target_seg, reduction='none')
-                # loss_bce = (raw_bce * class_weights).mean()
-                # loss_dice     = dice_loss(pred_seg, target_seg)
-                # loss_boundary = boundary_loss(pred_seg, target_seg)
-
-                # raw_bce_aux = F.binary_cross_entropy_with_logits(pred_seg_aux, target_seg_aux, reduction='none')
-                # loss_seg_aux = (raw_bce_aux * class_weights).mean() + dice_loss(pred_seg_aux, target_seg_aux)
-
                 if complex_loss:
                     loss_bce, loss_dice = mario_gated_seg_loss(
                         pred_seg, target_seg, pred["physics"], class_weights
@@ -490,18 +443,9 @@ def train_rollout(
                     raw_bce  = F.binary_cross_entropy_with_logits(pred_seg, target_seg, reduction='none')
                     loss_bce = (raw_bce * class_weights).mean()
                     loss_seg = loss_bce # + 0.2 * loss_seg_aux
-
-                # Pozdější kroky mají menší váhu — chyba se přirozeně akumuluje
-                # step_weight = 0.9 ** step
                 
                 loss_latent_l2 = torch.mean(pred["latent_state"] ** 2)
 
-                # step_loss = step_weight * (
-                #     3.0 * loss_physics +
-                #     2.0 * loss_visual  +
-                #     12.0 * loss_seg +
-                #     0.01 * loss_latent_l2 # Udržuje hodnoty blízko nule
-                # )
                 step_loss = (
                     3.0 * loss_physics +
                     2.0 * loss_visual  +

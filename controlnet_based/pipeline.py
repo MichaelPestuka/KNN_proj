@@ -44,11 +44,6 @@ import bitsandbytes as bnb
 import torchvision.transforms.functional as F_vision
 from transformer import GameStateTransformer, load_transformer_checkpoints, SegmentationDecoder, LatentCompressor, GameStateTransformer, build_segmentation_target
 
-
-# pip install diffusers==0.25.0 transformers==4.36.2 accelerate==0.25.0
-# pip install peft
-# pip install bitsandbytes
-
 ADE20K_PALETTE = {
     "sky":        (70,  130, 180),
     "ground":     (128, 64,  0  ),
@@ -71,17 +66,6 @@ SEG_PALETTE = torch.tensor([
     [70/255,  130/255, 180/255],  # 7: sky
 ], dtype=torch.float32)
 
-# SEG_PALETTE = torch.tensor([
-#     [0.10, 0.10, 0.10],  # 0: background
-#     [0.20, 0.80, 0.20],  # 1: ground
-#     [0.90, 0.20, 0.20],  # 2: mario
-#     [0.20, 0.20, 0.90],  # 3: pipe
-#     [0.90, 0.80, 0.10],  # 4: enemy
-#     [0.80, 0.20, 0.80],  # 5: cloud
-#     [0.50, 0.50, 0.50],  # 6
-#     [0.30, 0.65, 0.35],  # 7
-# ], dtype=torch.bfloat16)  # [8, 3]
-
 def seg_logits_to_rgb(pred_seg: torch.Tensor) -> torch.Tensor:
     """
     pred_seg: [B, 6, H, W] logity
@@ -92,17 +76,6 @@ def seg_logits_to_rgb(pred_seg: torch.Tensor) -> torch.Tensor:
     # einsum: pro každý pixel vážený součet barev přes třídy
     rgb = torch.einsum("bchw,cd->bdhw", probs, palette)
     return rgb.clamp(0.0, 1.0)
-
-# def seg_logits_to_rgb(pred_seg: torch.Tensor) -> torch.Tensor:
-#     """
-#     pred_seg: [B, C, H, W] logity
-#     returns:  [B, 3, H, W] float32 — ostrá mapa, jeden pixel = jedna třída
-#     """
-#     palette = SEG_PALETTE.to(pred_seg.device, dtype=pred_seg.dtype)  # [C, 3]
-#     class_idx = pred_seg.argmax(dim=1)                               # [B, H, W]
-#     # Indexování palety přes gather
-#     rgb = palette[class_idx]                                          # [B, H, W, 3]
-#     return rgb.permute(0, 3, 1, 2).contiguous()
 
 class DiffusionPipeline:
     def __init__(
@@ -153,7 +126,6 @@ class DiffusionPipeline:
         self.pipe.unet.requires_grad_(False)
         self.pipe.vae.requires_grad_(False)
         
-        # Buggy but good for more FPS
         if compile:
             self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead", fullgraph=True)
             self.pipe.controlnet = torch.compile(self.pipe.controlnet, mode="reduce-overhead", fullgraph=True)
@@ -197,8 +169,8 @@ class DiffusionPipeline:
                 control_rgb, size=(512, 512), mode='bilinear', align_corners=False
             )                                            # [1, 3, 512, 512]
 
-        import torchvision
-        torchvision.utils.save_image(control_512, "debug_control_image.png")
+        # import torchvision
+        # torchvision.utils.save_image(control_512, "debug_control_image.png")
 
         # start = time.time()
         with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=model_dtype):
@@ -292,7 +264,6 @@ class Trainer:
             
         self.transformer.train() # Zapne zpět dropout atd.
         
-        # 🚀 OPRAVA: Přidáme parametry Transformeru do existujícího optimizeru
         # Accelerate má optimizer zabalený v AcceleratedOptimizer, dostaneme se k němu přes .optimizer
         raw_optimizer = self.optimizer.optimizer if hasattr(self.optimizer, "optimizer") else self.optimizer
         
@@ -657,7 +628,6 @@ def generate_video(
     frames_meta = data["frames"]
     device = pipeline.device
     
-    # 🚀 OPRAVA 1: Transformer má pouze seq_len, který platí pro oboje (akce i stavy)
     seq_len = pipeline.transformer.seq_len
     dtype = next(pipeline.transformer.parameters()).dtype
 
@@ -711,14 +681,13 @@ def generate_video(
 
     noop_action = torch.tensor([0., 0., 0., 0., 1.], device=device, dtype=dtype)
 
-    print("🚀 Generating video autoregressively...")
+    print("Generating video autoregressively...")
 
     gc.collect()
     torch.cuda.empty_cache()
     
     max_steps = min(len(frames_meta) - 1, num_frames)
 
-    # --- 🔒 BEZPEČNOSTNÍ BLOK: Uložení stavů a přepnutí do eval ---
     was_transformer_training = pipeline.transformer.training
     was_controlnet_training = pipeline.controlnet.training
     was_unet_training = pipeline.pipe.unet.training
@@ -763,7 +732,7 @@ def generate_video(
         traceback.print_exc()
         
     finally:
-        # --- 🧹 ÚKLID: Návrat do původního stavu ---
+        # --- ÚKLID: Návrat do původního stavu ---
         if was_transformer_training:
             pipeline.transformer.train()
         if was_controlnet_training:
@@ -802,7 +771,7 @@ if __name__ == "__main__":
 
     # Vypisovat informace chceme jen na hlavním procesu (GPU 0), aby se nezdvojovaly logy
     if accelerator.is_local_main_process:
-        print(f"🚀 Spouštím trénink na {accelerator.num_processes} GPU!")
+        print(f"Spouštím trénink na {accelerator.num_processes} GPU!")
         
     img_size = 256
     seq_len = 4
