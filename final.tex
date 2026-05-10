@@ -50,6 +50,8 @@ Our third generation dataset improved on this drastically by using more shorter 
   \label{fig:collected_data3_actions}
 \end{figure*}
 
+Further discussion of the impact the improved dataset had on model performance can be found in Section \ref{eval} and Figure \ref{fig:data-compare}.
+
 \section{GameNGen architecture}
 \label{gamengen}
 
@@ -112,7 +114,7 @@ For this inference mode on the GameNGen architecture model, only 3 diffusion ste
 
 An interactive version of our ControlNet based approach is also available.
 
-\section{Evaluation}
+\section{Evaluation} \label{eval}
 
 While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. One of these is LPIPS (Learned Perceptual Image Patch Similarity) \footnote{\url{https://arxiv.org/abs/1801.03924}}, which is also cited in the GameNGen paper. This metric is also available from a PyPI package from the authors of the paper\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}. We have employed both PSNR and LPIPS in an evaluation script.
 
@@ -132,7 +134,7 @@ Our latest model \texttt{sd-mario-3} is also a big improvement compared to our f
 \begin{figure*}
   \centering
   \includegraphics[width=\textwidth]{figures/data_compare_eval_1&3.png}
-  \caption{An evaluation of aggregated per-frame metrics on a few runs from the real user gameplay data across 2 model checkpoints}
+  \caption{An evaluation of aggregated per-frame metrics on a few runs from the real user gameplay data across our original model presented at checkpoint (\texttt{sd-fixed}) and our latest (\texttt{sd-mario-3})}
   \label{fig:data-compare}
 \end{figure*}
 
