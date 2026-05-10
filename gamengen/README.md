@@ -4,7 +4,7 @@ This file contains information on how to run gameNgen training followed by the o
 #How to run:
 
 Training was done inside a miniconda3 encironment. The environment can be installed using:
-# $ conda create --name <env> --file req.txt
+$ conda create --name <env> --file req.txt
 
 Then download the pretrained autoencoder from:
 https://huggingface.co/Michalp03/big-better-enc/settings
