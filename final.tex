@@ -26,7 +26,7 @@
 \section{Problem}
 The goal of our project is to create a playable simulation of a computer game by using a diffusion model. For such a model, the input is the previous frame (or a sequence of frames) and the user action. The output is the next frame. Various computer games have already been simulated using this approach.
 
-\section{Data generation}
+\section{Data generation} \label{data-generation}
 
 For generating the training data, a Mario Brothers emulator \footnote{\url{https://github.com/Kautenja/gym-super-mario-bros}} was used, as the Gymnasium framework did not have the NES game we were looking for. For controlling the game while generating the data, three strategies were originally used. The first was fully random, with a uniform distribution of all the provided \texttt{SIMPLE\_MOVEMENT} actions and some action stickiness over several frames. The second strategy relied on a pre-trained AI\footnote{\url{https://github.com/yumouwei/super-mario-bros-reinforcement-learning}}, and the third was a combination with random-length few-second periods of one or the other.
 
@@ -116,7 +116,7 @@ An interactive version of our ControlNet based approach is also available.
 
 While we discussed PSNR previously, we are currently focusing on less pixel-level, more perceptual metrics. One of these is LPIPS (Learned Perceptual Image Patch Similarity) \footnote{\url{https://arxiv.org/abs/1801.03924}}, which is also cited in the GameNGen paper. This metric is also available from a PyPI package from the authors of the paper\footnote{\url{https://pypi.org/project/lpips/\#1-learned-perceptual-image-patch-similarity-lpips-metric}}. We have employed both PSNR and LPIPS in an evaluation script.
 
-The displayed in Figure \ref{fig:real-gameplay-eval} is the output of the script based on a capture of real user gameplay inputs, comparing the output of the real game and various model checkpoints TODO. A side by side GIF of the ground truth and generated frames is available at these permalinks to GitHub ... TODO
+The plot displayed in Figure \ref{fig:real-gameplay-eval} is the output of the script. The ground truth data is an instrumented capture of human gameplay, compared with the output of our best model. A side by side GIF of the ground truth and generated frames is available at this permalink to GitHub \url{https://github.com/MichaelPestuka/KNN_proj/tree/80cf16b67242582644d0ae407c9e8687707fa741/figures/GIFs/sd-mario-3}.
 
 \begin{figure*}
   \centering
@@ -125,8 +125,26 @@ The displayed in Figure \ref{fig:real-gameplay-eval} is the output of the script
   \label{fig:real-gameplay-eval}
 \end{figure*}
 
-GAMENGEN ACHIVEVED LPIPS 0,198 @ 4 iterations, 0,205 @ 2 iterations. `sd-mario-3' achieves 0.195402 TBF our standard deviation is larger but whatever. The PSNR is not as good, but we consider this less indicative.
+Across this evaluation set of 10 gameplay sequences, the model at 3 diffusion steps achieves a better LPIPS result than the original GameNGen at 4 diffusion steps, but the given the different gameplay of Doom such a comparison may not be so fair.
 
-We hope to present a playable demo at the poster session.
+Our latest model \texttt{sd-mario-3} is also a big improvement compared to our first try presented at the checkpoint (\texttt{sd-fixed}), this comparison can be seen in Figure \ref{fig:data-compare}. The difference between the datasets these models were trained on is further described in Section \ref{data-generation}.
+
+\begin{figure*}
+  \centering
+  \includegraphics[width=\textwidth]{figures/data_compare_eval_1&3.png}
+  \caption{An evaluation of aggregated per-frame metrics on a few runs from the real user gameplay data across 2 model checkpoints}
+  \label{fig:data-compare}
+\end{figure*}
+
+We also compared different context length models on our original dataset, the results of this comparison can be seen in Figure \ref{fig:context-compare}. The results are most favourable for the 9 frame context, which was also used in the original GameNGen paper.
+
+\begin{figure*}
+  \centering
+  \includegraphics[width=\textwidth]{figures/context_length_compare_human_data.png}
+  \caption{An evaluation of aggregated per-frame metrics on a few runs from the real user gameplay data across varying model context lengths. Each model was trained separately for that context length.}
+  \label{fig:context-compare}
+\end{figure*}
+
+We hope to present a playable demo at the poster session to allow for hands on evaluation.
 
 \end{document}
