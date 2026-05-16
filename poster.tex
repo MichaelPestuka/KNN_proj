@@ -193,7 +193,7 @@
     the latent into a multi-class semantic segmentation map.
 
     \smallskip
-    \textbf{3. ControlNet Renderer} --- Stable Diffusion + semantic ControlNet
+    \textbf{3. ControlNet Renderer} --- Stable Diffusion + ControlNet
     renders the final frame conditioned on the segmentation map.
 
     \smallskip
@@ -207,12 +207,8 @@
     \smallskip
     \textbf{Training highlights:}
     \begin{itemize}\setlength\itemsep{1pt}
-      \item \emph{Progressive rollout}: 1-step teacher forcing $\to$
-            100-step autoregressive sequences.
-      \item \emph{Composite loss}: BCE + soft Dice + Sobel boundary
-            + physics-gated spatial loss.
-      \item Physics prior centred on the Transformer's predicted coordinates
-            enforces spatial consistency.
+      \item \emph{Progressive rollout}: Scales from 1-step teacher forcing up to 100-step autoregressive sequences to combat error drift.
+      \item \emph{Composite loss}: Standard BCE combined with soft Dice loss (penalises errors on sparse objects like Mario) and Sobel boundary loss (enforces crisp edges).
     \end{itemize}
   \end{block}
 
