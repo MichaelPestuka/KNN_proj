@@ -123,19 +123,44 @@
 
   \vskip0.25cm
 
-  \begin{block}{GameNGen Architecture}
-    Based on \textbf{Stable Diffusion 1.4}, adapted for game simulation:
-    \begin{itemize}\setlength\itemsep{1pt}
-      \item Action tokens replace text cross-attention.
-      \item Previous frames (VAE-encoded) concatenated to noised latents.
-      \item First Conv layer re-initialised to accept $4n$ input channels.
-      \item \textbf{Noise augmentation} on context frames prevents drift.
-      \item \textbf{Decoder fine-tuning} removes VAE blur artefacts.
-    \end{itemize}
-    \smallskip
-    Based on GameNGen\cite{valevski2025diffusionmodelsrealtimegame} and the
-    open-source reproduction by Arnaud Stiegler\cite{stiegler2024gamengenrepro}.
-  \end{block}
+  \begin{block}{\centering \textbf{GameNGen Architecture}}
+
+\setlength{\parskip}{0.4em}
+
+\textbf{GameNGen} builds on a pretrained \textbf{Stable Diffusion 1.4} model to predict the next game frame conditioned on:
+\begin{itemize}
+    \item a history of $n$ previous frames, and
+    \item a history of $n$ previous and the current player actions.
+\end{itemize}
+
+\vspace{0.3em}
+
+\textbf{Input adaptation.}
+The first convolutional layer of the Stable Diffusion U-Net is replaced with a newly initialized layer that accepts the latent representations of the $n$ history frames concatenated along the channel dimension.  
+This increases the input channel count from $4$ to $4n$.
+
+\vspace{0.3em}
+
+\textbf{Action conditioning.}
+Player actions are transformed into learned embeddings and injected into the model through cross-attention conditioning.
+
+\vspace{0.3em}
+
+\textbf{Decoder fine-tuning.}
+To improve visual sharpness at low resolution, the decoder is additionally fine-tuned on the gameplay dataset.
+
+\vspace{0.3em}
+
+\textbf{Autoregressive generation.}
+Frames are generated autoregressively, where the diffusion sampling step count is tuned to maintain a stable real-time framerate.
+
+\vspace{0.5em}
+
+{\footnotesize
+Implementation based on GameNGen~\cite{valevski2025diffusionmodelsrealtimegame} and the open-source reproduction by Arnaud Stiegler~\cite{stiegler2024gamengenrepro}.
+}
+
+\end{block}
 
   \vskip0.25cm
 
